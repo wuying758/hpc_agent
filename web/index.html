@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HPC 作业分析工作台</title>
+<script>
+(function(){try{var t=localStorage.getItem('theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','light');}})();
+</script>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<!-- 手机导航开关 -->
+<button class="nav-toggle" id="navToggle" aria-label="导航">
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+</button>
+
+<!-- 左侧导航 -->
+<aside id="nav">
+  <div class="nav-brand">HPC 工作台<small>SJTU 超算 · 交我创</small></div>
+  <nav>
+    <a href="#/chat" data-page="chat">智能分析</a>
+    <a href="#/jobs" data-page="jobs">作业中心</a>
+    <a href="#/tasks" data-page="tasks">分析任务</a>
+    <a href="#/tickets" data-page="tickets">工单中心</a>
+    <a href="#/data" data-page="data">数据连接</a>
+  </nav>
+  <div class="nav-footer">
+    <button id="themeBtn">深色</button>
+  </div>
+</aside>
+
+<!-- 主区域 -->
+<main id="main">
+  <!-- 智能分析 -->
+  <div id="page-chat" class="page">
+    <div class="chat-wrap">
+      <div id="msgs"></div>
+      <div id="composer" class="composer">
+        <div class="composer-inner">
+          <textarea id="q" rows="1" placeholder="输入问题，Enter 发送，Shift+Enter 换行" autocomplete="off"></textarea>
+          <div class="composer-bar">
+            <button class="btn btn-sm" id="sessBtn">历史</button>
+            <div class="right">
+              <span class="ctx" id="ctxInfo">上下文 —</span>
+              <select id="modelSel" title="模型" style="height:28px;font-size:12px;padding:2px 6px"><option value="qwen">qwen</option></select>
+              <button id="sendBtn" title="发送"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 集群总览侧栏（桌面端） -->
+    <div id="ovPanel" class="ov-panel">
+      <div class="ov-panel-head">
+        <h3>集群总览</h3>
+        <select id="ovDaysSel" style="height:26px;font-size:11px;padding:2px 6px;width:auto"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option></select>
+      </div>
+      <div class="ov-panel-body" id="ovBody"><div class="empty">加载中…</div></div>
+    </div>
+    <!-- 会话侧栏 -->
+    <div id="sessionPanel" class="session-panel" hidden>
+      <div class="sp-head">
+        <h3>历史会话</h3>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm" id="sessNew">新建</button>
+          <button class="btn btn-sm" id="sessClose">关闭</button>
+        </div>
+      </div>
+      <div class="sp-list" id="spList"></div>
+    </div>
+  </div>
+
+  <!-- 作业中心 -->
+  <div id="page-jobs" class="page" hidden>
+    <div class="page-header">
+      <h2>作业中心</h2>
+      <p id="jobsInfo">按条件筛选浏览作业</p>
+    </div>
+    <div class="filters">
+      <select id="jStateSel"><option value="">全部状态</option><option>RUNNING</option><option>COMPLETED</option><option>FAILED</option><option>TIMEOUT</option><option>PENDING</option><option>CANCELLED</option></select>
+      <select id="jDaysSel"><option value="7">近 7 天</option><option value="14">近 14 天</option><option value="30">近 30 天</option></select>
+      <input id="jSearch" type="search" placeholder="搜索作业 ID 或名称">
+    </div>
+    <div class="table-wrap">
+      <table class="table" id="jobsTable">
+        <thead><tr><th>ID</th><th>名称</th><th>用户</th><th>分区</th><th>状态</th><th class="num">运行h</th><th class="num">核</th><th>提交</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <button class="btn btn-sm" id="jPrev" disabled>上一页</button>
+      <span id="jPageInfo">1/1</span>
+      <button class="btn btn-sm" id="jNext" disabled>下一页</button>
+    </div>
+  </div>
+
+  <!-- 分析任务 -->
+  <div id="page-tasks" class="page" hidden>
+    <div class="page-header">
+      <h2>分析任务</h2>
+      <p>发起分析，保存步骤、证据和结论</p>
+    </div>
+    <div id="taskForm" style="margin-bottom:20px;padding:16px;background:var(--surface);border:1px solid var(--line);border-radius:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="taskTitle" placeholder="任务标题（如：分析近7天反复失败）" style="flex:1;min-width:200px">
+        <select id="taskDays" style="width:100px"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option></select>
+        <button class="btn btn-primary btn-sm" id="taskStart">发起</button>
+        <button class="btn btn-sm" id="taskCancelBtn">取消</button>
+      </div>
+      <textarea id="taskMsg" placeholder="具体分析问题（可选，默认用标题）" style="width:100%;margin-top:8px;min-height:36px"></textarea>
+    </div>
+    <div id="taskList"></div>
+  </div>
+
+  <!-- 工单中心 -->
+  <div id="page-tickets" class="page" hidden>
+    <div class="page-header">
+      <h2>工单中心</h2>
+      <p>跟踪诊断发现问题的处理进度</p>
+    </div>
+    <div class="filters">
+      <select id="tkStatusSel"><option value="">全部状态</option><option value="pending">待处理</option><option value="in_progress">处理中</option><option value="resolved">已解决</option><option value="cancelled">已取消</option></select>
+      <input id="tkSearch" type="search" placeholder="搜索工单号或原因">
+    </div>
+    <div id="ticketList"></div>
+  </div>
+
+  <!-- 数据连接 -->
+  <div id="page-data" class="page" hidden>
+    <div class="page-header">
+      <h2>数据与连接</h2>
+      <p>HPC 集群和模型 API 的连接状态、数据覆盖范围</p>
+    </div>
+    <div id="dataBody"></div>
+  </div>
+</main>
+
+<!-- 右侧抽屉 -->
+<div id="drawer" class="drawer" hidden>
+  <div class="drawer-head">
+    <h3 id="drawerTitle"></h3>
+    <button id="drawerClose" aria-label="关闭">&times;</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</div>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# 凭据
+.env
+
+# 数据（运行时生成）
+data/
+
+# 日志
+*.log
+
+# 临时/备份
+*.bak
+*.tmp
+
+# 截图（开发用）
+*.png
+
+# Node
+node_modules/
+package-lock.json
+
+# 系统
+.DS_Store
+Thumbs.db

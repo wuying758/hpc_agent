@@ -1,0 +1,13 @@
+{
+  "name": "hpc-waste-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fetch": "node src/fetch_jobs.mjs",
+    "analyze": "node src/analyze.mjs",
+    "cli": "node src/cli.mjs",
+    "serve": "node src/server.mjs",
+    "test": "node --test"
+  }
+}
