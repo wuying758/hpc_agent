@@ -1,6 +1,6 @@
 // 智能分析（对话）
 import { state, navigate } from './store.js';
-import { esc, fmt, renderMarkdown, statePill, openDrawer, closeDrawer, api } from './utils.js';
+import { esc, fmt, renderMarkdown, statePill, openDrawer, closeDrawer, api, relTime } from './utils.js';
 
 let sid = null, busy = false, curAbort = null, pendingQueue = [];
 let curBatch = null, curText = null, curReason = null, lastRender = 0, taskSteps = [];
@@ -76,7 +76,7 @@ async function doSend(message) {
   busy = true; setStopUI(true);
   taskSteps = [];
   addMsg('user', message);
-  const bubble = addMsg('ai', '');
+  const { bubble } = addMsg('ai', '');
   let curBatch2 = null, curText2 = null, curReason2 = null;
 
   const ensureText = () => { if (!curText2) curText2 = newTextSeg(bubble); return curText2; };
@@ -152,9 +152,10 @@ async function doSend(message) {
     } else {
       ensureText().body.innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
     }
+  } finally {
+    busy = false; curAbort = null;
+    setStopUI(false);
   }
-  busy = false; curAbort = null;
-  setStopUI(false);
   if (pendingQueue.length) { const next = pendingQueue.shift(); renderQueue(); setTimeout(() => doSend(next), 200); return; }
   $q().focus();
 }
@@ -313,10 +314,11 @@ function relTimeStr(s) {
 }
 
 async function loadSession(id) {
-  sid = id;
-  try { localStorage.setItem('sid', id); } catch {}
   try {
     const s = await api('/api/sessions/' + id);
+    // 读取成功后再更新 sid
+    sid = id;
+    try { localStorage.setItem('sid', id); } catch {}
     const msgs = $msgs();
     msgs.innerHTML = '';
     if (s.messages) {
@@ -330,5 +332,12 @@ async function loadSession(id) {
     }
     scrollBottom();
     document.getElementById('sessionPanel').hidden = true;
-  } catch {}
+  } catch (e) {
+    console.error('loadSession failed:', e);
+    // 失败时保留当前会话，显示提示
+    const msgs = $msgs();
+    if (msgs.children.length === 0) {
+      msgs.innerHTML = `<div style="text-align:center;padding:20px;color:var(--danger)">会话加载失败：${esc(e.message)}</div>`;
+    }
+  }
 }
