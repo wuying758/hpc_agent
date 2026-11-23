@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { agentChat, cfg, tools, validateTicketAction } from './agent.mjs';
+import { agentChat, cfg, tools, validateTicketAction, llmFetch } from './agent.mjs';
 import { analyze, loadJobs, getAnalysis } from './analyze.mjs';
 import * as store from './store.mjs';
 import { checkCreds } from './hpc_client.mjs';
@@ -99,6 +99,12 @@ const server = http.createServer(async (req, res) => {
         store.addMessage(sid, 'assistant', reply, { reasoning: reasoning || undefined });
         const allMsgs = store.getSessionHistory(sid);
         const ctxPct = Math.min(100, Math.round(allMsgs.reduce((s, m) => s + (m.content || '').length, 0) / 1.6 / 32000 * 100));
+        // LLM 生成会话标题
+        const title = await genSessionTitle(message, reply, model);
+        if (title) {
+          store.renameSession(sid, title);
+          write({ t: 'title', title });
+        }
         res.end(JSON.stringify({ t: 'done', session_id: sid, context: ctxPct }) + '\n');
       }
       return;
@@ -351,6 +357,23 @@ const server = http.createServer(async (req, res) => {
     console.error('request error:', e.message);
   }
 });
+
+// 用 LLM 生成会话标题
+async function genSessionTitle(userMsg, reply, model) {
+  try {
+    const res = await llmFetch({
+      model: model || cfg.model, temperature: 0.3, max_tokens: 30,
+      messages: [
+        { role: 'system', content: '根据用户问题生成一个简短的会话标题（≤ 14 字，中文，不要标点、不要引号）。只输出标题本身。' },
+        { role: 'user', content: userMsg.slice(0, 200) },
+      ],
+    }, { retries: 1, timeoutMs: 15000 });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const title = (data.choices?.[0]?.message?.content || '').trim().replace(/[\"'。\.,!！?？]/g, '');
+    return title ? title.slice(0, 20) : null;
+  } catch { return null; }
+}
 
 process.on('uncaughtException', (e) => console.error('uncaughtException:', e.stack || e.message));
 process.on('unhandledRejection', (e) => console.error('unhandledRejection:', (e && e.stack) || e));

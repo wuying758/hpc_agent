@@ -17,16 +17,40 @@
 
 <!-- 左侧导航 -->
 <aside id="nav">
-  <div class="nav-brand">HPC 工作台<small>SJTU 超算 · 交我创</small></div>
+  <div class="nav-brand">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      HPC 工作台
+    </div>
+    <small>SJTU 超算 · 交我创</small>
+  </div>
   <nav>
-    <a href="#/chat" data-page="chat">智能分析</a>
-    <a href="#/jobs" data-page="jobs">作业中心</a>
-    <a href="#/tasks" data-page="tasks">分析任务</a>
-    <a href="#/tickets" data-page="tickets">工单中心</a>
-    <a href="#/data" data-page="data">数据连接</a>
+    <a href="#/chat" data-page="chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      智能分析
+    </a>
+    <a href="#/jobs" data-page="jobs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 4v16M2 8h20"/></svg>
+      作业中心
+    </a>
+    <a href="#/tasks" data-page="tasks">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19v-6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2zm0 0V9a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v10m-6 0a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2m0 0V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2z"/></svg>
+      分析任务
+    </a>
+    <a href="#/tickets" data-page="tickets">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+      工单中心
+    </a>
+    <a href="#/data" data-page="data">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      数据连接
+    </a>
   </nav>
   <div class="nav-footer">
-    <button id="themeBtn">深色</button>
+    <button id="themeBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      深色
+    </button>
   </div>
 </aside>
 
@@ -35,26 +59,49 @@
   <!-- 智能分析 -->
   <div id="page-chat" class="page">
     <div class="chat-wrap">
-      <div id="msgs"></div>
+      <!-- 页头 -->
+      <div class="chat-header">
+        <div>
+          <h1>智能分析</h1>
+          <p>基于集群数据的自然语言问答与诊断</p>
+        </div>
+        <div class="chat-header-actions">
+          <button class="btn btn-sm" id="ovToggleBtn" title="集群总览">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 5-9"/></svg>
+            总览
+          </button>
+          <button class="btn btn-sm" id="sessBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            历史
+          </button>
+        </div>
+      </div>
+      <!-- 消息区 -->
+      <div id="msgs"><div class="chat-content"></div></div>
+      <!-- 输入区 -->
       <div id="composer" class="composer">
         <div class="composer-inner">
-          <textarea id="q" rows="1" placeholder="输入问题，Enter 发送，Shift+Enter 换行" autocomplete="off"></textarea>
-          <div class="composer-bar">
-            <button class="btn btn-sm" id="sessBtn">历史</button>
-            <div class="right">
-              <span class="ctx" id="ctxInfo">上下文 —</span>
-              <select id="modelSel" title="模型" style="height:28px;font-size:12px;padding:2px 6px"><option value="qwen">qwen</option></select>
-              <button id="sendBtn" title="发送"></button>
+          <div class="composer-card">
+            <textarea id="q" rows="1" placeholder="输入问题，Enter 发送，Shift+Enter 换行" autocomplete="off"></textarea>
+            <div class="composer-bar">
+              <div class="right">
+                <span class="ctx" id="ctxInfo">上下文 —</span>
+                <select id="modelSel" title="模型"><option value="qwen">qwen</option></select>
+                <button id="sendBtn" title="发送"></button>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </div>
-    <!-- 集群总览侧栏（桌面端） -->
+    <!-- 集群总览侧栏 -->
     <div id="ovPanel" class="ov-panel">
       <div class="ov-panel-head">
-        <h3>集群总览</h3>
-        <select id="ovDaysSel" style="height:26px;font-size:11px;padding:2px 6px;width:auto"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option></select>
+        <div class="ov-head-row">
+          <h3>集群总览</h3>
+          <select id="ovDaysSel"><option value="7">7 天</option><option value="14">14 天</option><option value="30">30 天</option></select>
+        </div>
+        <div class="ov-meta" id="ovMeta">加载中…</div>
       </div>
       <div class="ov-panel-body" id="ovBody"><div class="empty">加载中…</div></div>
     </div>
@@ -62,8 +109,8 @@
     <div id="sessionPanel" class="session-panel" hidden>
       <div class="sp-head">
         <h3>历史会话</h3>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-sm" id="sessNew">新建</button>
+        <div class="sp-head-actions">
+          <button class="btn btn-sm" id="sessNew">+ 新建</button>
           <button class="btn btn-sm" id="sessClose">关闭</button>
         </div>
       </div>
@@ -101,14 +148,14 @@
       <h2>分析任务</h2>
       <p>发起分析，保存步骤、证据和结论</p>
     </div>
-    <div id="taskForm" style="margin-bottom:20px;padding:16px;background:var(--surface);border:1px solid var(--line);border-radius:8px">
+    <div id="taskForm" style="margin-bottom:20px;padding:16px 20px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md)">
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <input id="taskTitle" placeholder="任务标题（如：分析近7天反复失败）" style="flex:1;min-width:200px">
         <select id="taskDays" style="width:100px"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option></select>
         <button class="btn btn-primary btn-sm" id="taskStart">发起</button>
         <button class="btn btn-sm" id="taskCancelBtn">取消</button>
       </div>
-      <textarea id="taskMsg" placeholder="具体分析问题（可选，默认用标题）" style="width:100%;margin-top:8px;min-height:36px"></textarea>
+      <textarea id="taskMsg" placeholder="具体分析问题（可选，默认用标题）" style="width:100%;margin-top:10px;min-height:36px"></textarea>
     </div>
     <div id="taskList"></div>
   </div>

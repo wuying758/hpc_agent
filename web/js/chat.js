@@ -25,7 +25,42 @@ export function initChat() {
   // 会话面板
   document.getElementById('sessBtn').onclick = toggleSessionPanel;
   document.getElementById('sessClose').onclick = toggleSessionPanel;
-  document.getElementById('sessNew').onclick = () => { sid = null; localStorage.removeItem('sid'); $msgs().innerHTML = ''; showWelcome(); loadSessionList(); };
+  document.getElementById('sessNew').onclick = () => { sid = null; try{localStorage.removeItem('sid')}catch{}; $msgs().innerHTML = '<div class="chat-content"></div>'; showWelcome(); loadSessionList(); };
+  // 总览开关（带滑动动画）
+  const ovBtn = document.getElementById('ovToggleBtn');
+  if (ovBtn) ovBtn.addEventListener('click', () => {
+    const p = document.getElementById('ovPanel');
+    if (p.hidden) {
+      // 打开：移除 hidden，先设 opacity:0 + margin-right:0，再过渡到正常
+      p.hidden = false;
+      p.style.transition = 'none';
+      p.style.marginRight = 'calc(-1 * var(--ov-w))';
+      p.style.opacity = '0';
+      p.offsetHeight; // force reflow
+      p.style.transition = '';
+      p.style.marginRight = '';
+      p.style.opacity = '';
+      ovBtn.setAttribute('aria-expanded', 'true');
+      ovBtn.style.borderColor = 'var(--acc)';
+      ovBtn.style.color = 'var(--acc)';
+    } else {
+      // 关闭：过渡到右侧滑出，结束后 hidden
+      p.style.transition = 'none';
+      p.offsetHeight;
+      p.style.transition = '';
+      p.style.marginRight = 'calc(-1 * var(--ov-w))';
+      p.style.opacity = '0';
+      p.addEventListener('transitionend', function handler() {
+        p.removeEventListener('transitionend', handler);
+        p.hidden = true;
+        p.style.marginRight = '';
+        p.style.opacity = '';
+      });
+      ovBtn.setAttribute('aria-expanded', 'false');
+      ovBtn.style.borderColor = '';
+      ovBtn.style.color = '';
+    }
+  });
   loadSessionList();
 
   // 模型选择
@@ -42,14 +77,32 @@ export function initChat() {
 
 function showWelcome() {
   $msgs().innerHTML = `
-    <div style="text-align:center;padding:60px 20px">
-      <h2 style="font-size:22px;margin-bottom:8px">从作业数据中找到线索</h2>
-      <p style="color:var(--dim);font-size:14px;max-width:400px;margin:0 auto 24px">基于 SJTU HPC 集群的真实作业记录，定位超时、排队、反复失败等低效作业。</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:480px;margin:0 auto">
-        <button class="btn" onclick="window.__chatSend('最近7天集群整体情况如何？')">集群概况</button>
-        <button class="btn" onclick="window.__chatSend('最近7天运行最久的超时作业有哪些？')">超时排查</button>
-        <button class="btn" onclick="window.__chatSend('最近7天哪些用户反复失败？')">反复失败</button>
-        <button class="btn" onclick="window.__chatSend('诊断作业 #') + prompt('输入作业ID')">单作业诊断</button>
+    <div class="chat-content">
+      <div class="welcome">
+        <h2>从作业数据中找到线索</h2>
+        <p>基于 SJTU HPC 集群的真实作业记录，定位超时、排队、反复失败等低效作业。</p>
+        <div class="welcome-grid">
+          <div class="welcome-card" onclick="window.__chatSend('最近7天集群整体情况如何？')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 5-9"/></svg>
+            <span class="wc-title">集群概况</span>
+            <span class="wc-desc">总作业量、状态分布、资源浪费</span>
+          </div>
+          <div class="welcome-card" onclick="window.__chatSend('最近7天运行最久的超时作业有哪些？')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            <span class="wc-title">超时排查</span>
+            <span class="wc-desc">找出超过时限仍在运行的作业</span>
+          </div>
+          <div class="welcome-card" onclick="window.__chatSend('最近7天哪些用户反复失败？')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+            <span class="wc-title">反复失败</span>
+            <span class="wc-desc">同用户同作业多次失败的组</span>
+          </div>
+          <div class="welcome-card" onclick="const id=prompt('输入作业ID');if(id)window.__chatSend('诊断作业 #'+id)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <span class="wc-title">单作业诊断</span>
+            <span class="wc-desc">输入作业 ID，分析低效原因</span>
+          </div>
+        </div>
       </div>
     </div>`;
 }
@@ -133,6 +186,7 @@ async function doSend(message) {
         if (ev.t === 'tool') { if (curBatch2) { batchItemDone(curBatch2, ev.result); taskSteps.push({ type: 'tool', name: ev.d, result: (ev.result||'').slice(0,500) }); } scrollBottom(); }
         if (ev.t === 'batch_end') { if (curBatch2) { setBatchDone(curBatch2); curBatch2 = null; curText2 = null; } scrollBottom(); }
         if (ev.t === 'suggest') { setQuickItems(ev.items); }
+        if (ev.t === 'title') { /* 会话标题已更新，下次刷新列表时生效 */ }
         if (ev.t === 'done') {
           sid = ev.session_id;
           try { localStorage.setItem('sid', sid); } catch {}
@@ -162,17 +216,20 @@ async function doSend(message) {
 
 function addMsg(role, text) {
   const msgs = $msgs();
-  // 清除欢迎
-  const welcome = msgs.querySelector('[style*="text-align:center"]');
+  // 确保 .chat-content 容器存在
+  let content = msgs.querySelector('.chat-content');
+  if (!content) { content = document.createElement('div'); content.className = 'chat-content'; msgs.appendChild(content); }
+  // 清除欢迎页
+  const welcome = content.querySelector('.welcome');
   if (welcome) welcome.remove();
   const div = document.createElement('div');
   div.className = 'msg ' + role;
   if (role === 'user') {
-    div.innerHTML = `<div class="who">我</div><div class="bubble">${esc(text)}</div>`;
+    div.innerHTML = `<div class="bubble">${esc(text)}</div>`;
   } else {
     div.innerHTML = `<div class="who">助手</div><div class="bubble"></div>`;
   }
-  msgs.appendChild(div);
+  content.appendChild(div);
   return { bubble: div.querySelector('.bubble') };
 }
 
@@ -273,8 +330,18 @@ function scrollBottom() {
 // 会话面板
 function toggleSessionPanel() {
   const p = document.getElementById('sessionPanel');
-  p.hidden = !p.hidden;
-  if (!p.hidden) loadSessionList();
+  if (p.hidden) {
+    p.hidden = false;
+    p.offsetHeight;
+    p.classList.add('sp-open');
+    loadSessionList();
+  } else {
+    p.classList.remove('sp-open');
+    p.addEventListener('transitionend', function handler() {
+      p.removeEventListener('transitionend', handler);
+      p.hidden = true;
+    });
+  }
 }
 
 async function loadSessionList() {
@@ -336,7 +403,11 @@ async function loadSession(id) {
       }
     }
     scrollBottom();
-    document.getElementById('sessionPanel').hidden = true;
+    const sp = document.getElementById('sessionPanel');
+    if (!sp.hidden) {
+      sp.classList.remove('sp-open');
+      sp.addEventListener('transitionend', function h() { sp.removeEventListener('transitionend', h); sp.hidden = true; });
+    }
   } catch (e) {
     console.error('loadSession failed:', e);
     // 失败时保留当前会话，显示提示

@@ -219,7 +219,7 @@ async function genSuggestions(history, lastUserMsg, lastReply, model) {
 }
 
 // 带重试的 LLM 调用（网络抖动 fetch failed 时重试，避免临时断连直接失败）
-async function llmFetch(body, { retries = 2, timeoutMs = 120000 } = {}) {
+export async function llmFetch(body, { retries = 2, timeoutMs = 120000 } = {}) {
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
