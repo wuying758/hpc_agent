@@ -184,42 +184,47 @@ function newTextSeg(bubble) {
 }
 
 function newBatchSeg(bubble, count) {
-  const seg = document.createElement('div');
-  seg.className = 'batchseg';
-  seg.innerHTML = `<div class="batch-head"><span class="bh-status">运行中</span><span class="bh-cur">准备调用 ${count} 个工具</span></div><div class="batch-items"></div>`;
+  const seg = document.createElement('details');
+  seg.className = 'tool-fold';
+  seg.open = true; // 运行中默认展开
+  seg.innerHTML = `
+    <summary><span class="tf-status">运行中</span><span class="tf-label">正在调用 ${count} 个工具…</span></summary>
+    <div class="tf-body"></div>`;
   bubble.appendChild(seg);
-  return { seg, items: seg.querySelector('.batch-items'), cur: seg.querySelector('.bh-cur'), status: seg.querySelector('.bh-status'), total: count, finished: 0, _lastItem: null };
+  return { seg, items: seg.querySelector('.tf-body'), label: seg.querySelector('.tf-label'), status: seg.querySelector('.tf-status'), total: count, finished: 0, _lastItem: null, _names: [] };
 }
 
 function batchItemStart(b, narrate) {
   const it = document.createElement('div');
-  it.className = 'batch-item';
-  it.innerHTML = `<span style="color:var(--dim)">运行中</span> ${esc(narrate)}`;
+  it.className = 'tf-item';
+  it.innerHTML = `<span class="tf-st">运行中</span> ${esc(narrate)}`;
   b.items.appendChild(it);
   b._lastItem = it;
+  b._names.push(narrate);
+  // 更新折叠标题
+  b.label.textContent = `调用 ${b._names.length} 个工具 · ${narrate}`;
 }
 
 function batchItemDone(b, result) {
   if (b._lastItem) {
-    const st = b._lastItem.querySelector('span');
-    if (st) { st.textContent = '已完成'; st.style.color = 'var(--ok)'; }
+    const st = b._lastItem.querySelector('.tf-st');
+    if (st) { st.textContent = '✓'; st.className = 'tf-st ok'; }
     if (result) {
       const ref = document.createElement('div');
-      ref.className = 'evidence-ref';
-      ref.style.cursor = 'default';
-      ref.textContent = '数据已记录';
+      ref.className = 'tf-result';
+      ref.textContent = result.slice(0, 120);
       b._lastItem.appendChild(ref);
     }
   }
   b.finished++;
-  b.cur.textContent = `已完成 ${b.finished}/${b.total}`;
   b._lastItem = null;
 }
 
 function setBatchDone(b) {
-  b.status.textContent = '已完成';
-  b.status.style.color = 'var(--ok)';
-  b.cur.textContent = `调用了 ${b.finished || b.total} 个工具`;
+  b.status.textContent = '完成';
+  b.status.className = 'tf-status done';
+  b.label.textContent = `调用了 ${b.finished || b.total} 个工具 · ${b._names[0] || ''}`;
+  b.seg.open = false; // 完成后折叠
 }
 
 function setQuickItems(items) {
