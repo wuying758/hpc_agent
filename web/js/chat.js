@@ -412,8 +412,8 @@ async function loadSessionList() {
       <div class="sp-item ${s.id === sid ? 'active' : ''}" data-sid="${s.id}">
         <span class="sp-title">${esc(s.title || '新会话')}</span>
         <span class="sp-actions">
-          <button class="sp-pin" data-act="pin" title="置顶">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+          <button class="sp-pin ${s.pinned ? 'pinned' : ''}" data-act="pin" title="${s.pinned ? '取消置顶' : '置顶'}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${s.pinned ? 'transform="rotate(45 12 12)"' : ''}><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
           </button>
           <button class="sp-more-btn" data-act="more" title="更多">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
@@ -456,16 +456,20 @@ async function loadSessionList() {
           }
         };
       });
-      // 置顶
+      // 置顶/取消置顶
       item.querySelector('[data-act="pin"]').onclick = (e) => {
         e.stopPropagation();
-        api('/api/sessions/' + item.dataset.sid, { method: 'PATCH', body: { pinned: true } }).then(loadSessionList);
+        const s = sessions.find(x => x.id === item.dataset.sid);
+        const nowPinned = s && s.pinned ? false : true;
+        api('/api/sessions/' + item.dataset.sid, { method: 'PATCH', body: { pinned: nowPinned } }).then(loadSessionList);
       };
       // 点行主体 → 打开会话
       item.onclick = (e) => {
         if (e.target.closest('.sp-actions')) return;
         // 关闭所有菜单
         list.querySelectorAll('.sp-menu[hidden=false]').forEach(m => m.hidden = true);
+        // 窄屏：关闭遮罩
+        if (window.innerWidth < 1100) showOvBackdrop(false);
         loadSession(item.dataset.sid);
       };
     });

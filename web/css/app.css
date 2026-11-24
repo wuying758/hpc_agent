@@ -160,6 +160,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .sp-item:hover .sp-actions { opacity: 1; }
 .sp-actions button { background: none; border: none; color: var(--dimmer); cursor: pointer; padding: 4px; border-radius: 4px; display: grid; place-items: center; }
 .sp-actions button:hover { color: var(--acc); background: var(--acc-soft); }
+.sp-actions button.pinned { color: var(--acc); }
 .sp-menu { position: absolute; right: 8px; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); z-index: 10; min-width: 100px; padding: 4px; }
 .sp-menu[hidden] { display: none; }
 .sp-menu button { display: block; width: 100%; text-align: left; background: none; border: none; padding: 7px 12px; font-size: 12.5px; color: var(--txt); cursor: pointer; border-radius: 4px; }
