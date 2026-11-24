@@ -338,7 +338,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 /* 响应式 */
 @media (max-width: 1100px) {
   .ov-panel { position: fixed; top: 0; right: 0; bottom: 0; box-shadow: var(--shadow-lg); z-index: 150; transition: transform .25s ease; }
-  .session-panel { position: fixed; top: 0; left: 0; bottom: 0; z-index: 150; box-shadow: var(--shadow-lg); }
+  .session-panel { position: fixed; top: 0; left: 0; bottom: 0; z-index: 150; box-shadow: var(--shadow-lg); transition: transform .25s ease; }
   #msgs { padding: 24px 20px 16px; }
   .composer { padding: 16px 20px 24px; }
 }

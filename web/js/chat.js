@@ -355,28 +355,51 @@ function scrollBottom() {
 // 会话面板
 function toggleSessionPanel() {
   const p = document.getElementById('sessionPanel');
+  const isNarrow = window.innerWidth < 1100;
   if (p.hidden) {
     p.hidden = false;
-    p.style.transition = 'none';
-    p.style.marginLeft = 'calc(-1 * 260px)';
-    p.style.opacity = '0';
-    p.offsetHeight;
-    p.style.transition = '';
-    p.style.marginLeft = '';
-    p.style.opacity = '';
-    loadSessionList();
-  } else {
-    p.style.transition = 'none';
-    p.offsetHeight;
-    p.style.transition = '';
-    p.style.marginLeft = 'calc(-1 * 260px)';
-    p.style.opacity = '0';
-    p.addEventListener('transitionend', function handler() {
-      p.removeEventListener('transitionend', handler);
-      p.hidden = true;
+    if (isNarrow) {
+      showOvBackdrop(true);
+      p.style.transition = 'none';
+      p.style.transform = 'translateX(-100%)';
+      p.offsetHeight;
+      p.style.transition = '';
+      p.style.transform = '';
+    } else {
+      p.style.transition = 'none';
+      p.style.marginLeft = 'calc(-1 * 260px)';
+      p.style.opacity = '0';
+      p.offsetHeight;
+      p.style.transition = '';
       p.style.marginLeft = '';
       p.style.opacity = '';
-    });
+    }
+    loadSessionList();
+  } else {
+    if (isNarrow) {
+      p.style.transition = 'none';
+      p.offsetHeight;
+      p.style.transition = '';
+      p.style.transform = 'translateX(-100%)';
+      showOvBackdrop(false);
+      p.addEventListener('transitionend', function handler() {
+        p.removeEventListener('transitionend', handler);
+        p.hidden = true;
+        p.style.transform = '';
+      });
+    } else {
+      p.style.transition = 'none';
+      p.offsetHeight;
+      p.style.transition = '';
+      p.style.marginLeft = 'calc(-1 * 260px)';
+      p.style.opacity = '0';
+      p.addEventListener('transitionend', function handler() {
+        p.removeEventListener('transitionend', handler);
+        p.hidden = true;
+        p.style.marginLeft = '';
+        p.style.opacity = '';
+      });
+    }
   }
 }
 
@@ -463,7 +486,7 @@ async function loadSession(id) {
   }
 }
 
-// 窄屏总览遮罩
+// 窄屏面板遮罩
 function showOvBackdrop(show) {
   let bd = document.getElementById('ovBackdrop');
   if (show) {
@@ -473,20 +496,9 @@ function showOvBackdrop(show) {
       bd.className = 'ov-backdrop';
       bd.onclick = () => {
         showOvBackdrop(false);
-        const p = document.getElementById('ovPanel');
-        if (p) {
-          p.style.transition = 'none';
-          p.offsetHeight;
-          p.style.transition = '';
-          p.style.transform = 'translateX(100%)';
-          p.addEventListener('transitionend', function h() {
-            p.removeEventListener('transitionend', h);
-            p.hidden = true;
-            p.style.transform = '';
-          });
-        }
-        const btn = document.getElementById('ovToggleBtn');
-        if (btn) { btn.setAttribute('aria-expanded','false'); btn.style.borderColor=''; btn.style.color=''; }
+        // 关闭所有窄屏面板
+        closeNarrowPanel('ovPanel', 'translateX(100%)', 'ovToggleBtn');
+        closeNarrowPanel('sessionPanel', 'translateX(-100%)', null);
       };
       document.body.appendChild(bd);
     }
@@ -501,5 +513,24 @@ function showOvBackdrop(show) {
         bd.hidden = true;
       });
     }
+  }
+}
+
+function closeNarrowPanel(id, transform, btnId) {
+  const p = document.getElementById(id);
+  if (p && !p.hidden) {
+    p.style.transition = 'none';
+    p.offsetHeight;
+    p.style.transition = '';
+    p.style.transform = transform;
+    p.addEventListener('transitionend', function h() {
+      p.removeEventListener('transitionend', h);
+      p.hidden = true;
+      p.style.transform = '';
+    });
+  }
+  if (btnId) {
+    const btn = document.getElementById(btnId);
+    if (btn) { btn.setAttribute('aria-expanded','false'); btn.style.cssText = ''; }
   }
 }
