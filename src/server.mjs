@@ -99,11 +99,13 @@ const server = http.createServer(async (req, res) => {
         store.addMessage(sid, 'assistant', reply, { reasoning: reasoning || undefined });
         const allMsgs = store.getSessionHistory(sid);
         const ctxPct = Math.min(100, Math.round(allMsgs.reduce((s, m) => s + (m.content || '').length, 0) / 1.6 / 32000 * 100));
-        // LLM 生成会话标题
-        const title = await genSessionTitle(message, reply, model);
-        if (title) {
-          store.renameSession(sid, title);
-          write({ t: 'title', title });
+        // 仅首轮对话用 LLM 生成会话标题
+        if (hist.length === 0) {
+          const title = await genSessionTitle(message, reply, model);
+          if (title) {
+            store.renameSession(sid, title);
+            write({ t: 'title', title });
+          }
         }
         res.end(JSON.stringify({ t: 'done', session_id: sid, context: ctxPct }) + '\n');
       }
@@ -205,7 +207,7 @@ const server = http.createServer(async (req, res) => {
         时限小时: j.limit ? +(j.limit / 60).toFixed(1) : null,
         申请核: j.cpu_req, 内存GB: j.mem_req ? +(j.mem_req / 1024).toFixed(1) : null,
         节点: j.node_req, CPU秒: +j.cpu_sec.toFixed(0),
-        CPU利用率: util != null ? util + '%' : '不可评估（cpu_sec=0 零值不能证明空转）',
+        CPU利用率: util != null ? util + '%' : '不可评估',
         退出码: j.exit, 历史同名: history.length,
         口径: `近${days}天`, 数据更新: '本地缓存',
       });
@@ -364,14 +366,15 @@ async function genSessionTitle(userMsg, reply, model) {
     const res = await llmFetch({
       model: model || cfg.model, temperature: 0.3, max_tokens: 30,
       messages: [
-        { role: 'system', content: '根据用户问题生成一个简短的会话标题（≤ 14 字，中文，不要标点、不要引号）。只输出标题本身。' },
+        { role: 'system', content: '根据用户问题和助手回答，生成一个概括性的会话主题标签（4~10字，中文名词短语，如"超时作业排查""反复失败分析""集群资源概况""作业诊断"）。不要重复用户原话，不要标点、引号、问号。只输出主题。' },
         { role: 'user', content: userMsg.slice(0, 200) },
+        { role: 'assistant', content: reply.slice(0, 500) },
       ],
     }, { retries: 1, timeoutMs: 15000 });
     if (!res.ok) return null;
     const data = await res.json();
     const title = (data.choices?.[0]?.message?.content || '').trim().replace(/[\"'。\.,!！?？]/g, '');
-    return title ? title.slice(0, 20) : null;
+    return title ? title.slice(0, 16) : null;
   } catch { return null; }
 }
 

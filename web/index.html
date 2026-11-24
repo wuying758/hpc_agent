@@ -58,6 +58,17 @@
 <main id="main">
   <!-- 智能分析 -->
   <div id="page-chat" class="page">
+    <!-- 历史会话侧栏（左侧并列） -->
+    <div id="sessionPanel" class="session-panel" hidden>
+      <div class="sp-head">
+        <h3>历史会话</h3>
+        <div class="sp-head-actions">
+          <button class="btn btn-sm" id="sessNew">+ 新建</button>
+          <button class="btn btn-sm" id="sessClose">关闭</button>
+        </div>
+      </div>
+      <div class="sp-list" id="spList"></div>
+    </div>
     <div class="chat-wrap">
       <!-- 页头 -->
       <div class="chat-header">
@@ -104,17 +115,6 @@
         <div class="ov-meta" id="ovMeta">加载中…</div>
       </div>
       <div class="ov-panel-body" id="ovBody"><div class="empty">加载中…</div></div>
-    </div>
-    <!-- 会话侧栏 -->
-    <div id="sessionPanel" class="session-panel" hidden>
-      <div class="sp-head">
-        <h3>历史会话</h3>
-        <div class="sp-head-actions">
-          <button class="btn btn-sm" id="sessNew">+ 新建</button>
-          <button class="btn btn-sm" id="sessClose">关闭</button>
-        </div>
-      </div>
-      <div class="sp-list" id="spList"></div>
     </div>
   </div>
 

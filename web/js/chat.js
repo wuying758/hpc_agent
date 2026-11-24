@@ -30,32 +30,42 @@ export function initChat() {
   const ovBtn = document.getElementById('ovToggleBtn');
   if (ovBtn) ovBtn.addEventListener('click', () => {
     const p = document.getElementById('ovPanel');
+    const isNarrow = window.innerWidth < 1100;
     if (p.hidden) {
-      // 打开：移除 hidden，先设 opacity:0 + margin-right:0，再过渡到正常
+      // 打开
       p.hidden = false;
-      p.style.transition = 'none';
-      p.style.marginRight = 'calc(-1 * var(--ov-w))';
-      p.style.opacity = '0';
-      p.offsetHeight; // force reflow
-      p.style.transition = '';
-      p.style.marginRight = '';
-      p.style.opacity = '';
+      if (isNarrow) {
+        showOvBackdrop(true);
+      } else {
+        p.style.transition = 'none';
+        p.style.marginRight = 'calc(-1 * var(--ov-w))';
+        p.style.opacity = '0';
+        p.offsetHeight;
+        p.style.transition = '';
+        p.style.marginRight = '';
+        p.style.opacity = '';
+      }
       ovBtn.setAttribute('aria-expanded', 'true');
       ovBtn.style.borderColor = 'var(--acc)';
       ovBtn.style.color = 'var(--acc)';
     } else {
-      // 关闭：过渡到右侧滑出，结束后 hidden
-      p.style.transition = 'none';
-      p.offsetHeight;
-      p.style.transition = '';
-      p.style.marginRight = 'calc(-1 * var(--ov-w))';
-      p.style.opacity = '0';
-      p.addEventListener('transitionend', function handler() {
-        p.removeEventListener('transitionend', handler);
+      // 关闭
+      if (isNarrow) {
+        showOvBackdrop(false);
         p.hidden = true;
-        p.style.marginRight = '';
-        p.style.opacity = '';
-      });
+      } else {
+        p.style.transition = 'none';
+        p.offsetHeight;
+        p.style.transition = '';
+        p.style.marginRight = 'calc(-1 * var(--ov-w))';
+        p.style.opacity = '0';
+        p.addEventListener('transitionend', function handler() {
+          p.removeEventListener('transitionend', handler);
+          p.hidden = true;
+          p.style.marginRight = '';
+          p.style.opacity = '';
+        });
+      }
       ovBtn.setAttribute('aria-expanded', 'false');
       ovBtn.style.borderColor = '';
       ovBtn.style.color = '';
@@ -332,14 +342,25 @@ function toggleSessionPanel() {
   const p = document.getElementById('sessionPanel');
   if (p.hidden) {
     p.hidden = false;
+    p.style.transition = 'none';
+    p.style.marginLeft = 'calc(-1 * 260px)';
+    p.style.opacity = '0';
     p.offsetHeight;
-    p.classList.add('sp-open');
+    p.style.transition = '';
+    p.style.marginLeft = '';
+    p.style.opacity = '';
     loadSessionList();
   } else {
-    p.classList.remove('sp-open');
+    p.style.transition = 'none';
+    p.offsetHeight;
+    p.style.transition = '';
+    p.style.marginLeft = 'calc(-1 * 260px)';
+    p.style.opacity = '0';
     p.addEventListener('transitionend', function handler() {
       p.removeEventListener('transitionend', handler);
       p.hidden = true;
+      p.style.marginLeft = '';
+      p.style.opacity = '';
     });
   }
 }
@@ -405,8 +426,17 @@ async function loadSession(id) {
     scrollBottom();
     const sp = document.getElementById('sessionPanel');
     if (!sp.hidden) {
-      sp.classList.remove('sp-open');
-      sp.addEventListener('transitionend', function h() { sp.removeEventListener('transitionend', h); sp.hidden = true; });
+      sp.style.transition = 'none';
+      sp.offsetHeight;
+      sp.style.transition = '';
+      sp.style.marginLeft = 'calc(-1 * 260px)';
+      sp.style.opacity = '0';
+      sp.addEventListener('transitionend', function h() {
+        sp.removeEventListener('transitionend', h);
+        sp.hidden = true;
+        sp.style.marginLeft = '';
+        sp.style.opacity = '';
+      });
     }
   } catch (e) {
     console.error('loadSession failed:', e);
@@ -415,5 +445,28 @@ async function loadSession(id) {
     if (msgs.children.length === 0) {
       msgs.innerHTML = `<div style="text-align:center;padding:20px;color:var(--danger)">会话加载失败：${esc(e.message)}</div>`;
     }
+  }
+}
+
+// 窄屏总览遮罩
+function showOvBackdrop(show) {
+  let bd = document.getElementById('ovBackdrop');
+  if (show) {
+    if (!bd) {
+      bd = document.createElement('div');
+      bd.id = 'ovBackdrop';
+      bd.className = 'ov-backdrop';
+      bd.onclick = () => {
+        showOvBackdrop(false);
+        const p = document.getElementById('ovPanel');
+        if (p) p.hidden = true;
+        const btn = document.getElementById('ovToggleBtn');
+        if (btn) { btn.setAttribute('aria-expanded','false'); btn.style.borderColor=''; btn.style.color=''; }
+      };
+      document.body.appendChild(bd);
+    }
+    bd.hidden = false;
+  } else {
+    if (bd) bd.hidden = true;
   }
 }

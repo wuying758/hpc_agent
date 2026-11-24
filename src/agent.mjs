@@ -98,7 +98,7 @@ const tools = [
         时限小时: limitH,
         申请: { 核: j.cpu_req, 内存GB: j.mem_req ? +(j.mem_req / 1024).toFixed(1) : null, 节点: j.node_req },
         CPU秒: +j.cpu_sec.toFixed(0),
-        CPU利用率: util != null ? +(util * 100).toFixed(1) + '%' : '不可评估（cpu_sec=0 零值不能证明空转，可能是记账缺失）',
+        CPU利用率: util != null ? +(util * 100).toFixed(1) + '%' : '不可评估',
         状态: j.state, 退出码: j.exit, 用户: j.user };
     },
   },
@@ -376,7 +376,7 @@ export function computeJobDetail(j) {
     运行小时: elapsedH,
     时限小时: limitH,
     CPU秒: +j.cpu_sec.toFixed(0),
-    CPU利用率: util != null ? +(util * 100).toFixed(1) + '%' : '不可评估（cpu_sec=0 零值不能证明空转，可能是记账缺失）',
+    CPU利用率: util != null ? +(util * 100).toFixed(1) + '%' : '不可评估',
     状态: j.state,
     退出码: j.exit,
   };
