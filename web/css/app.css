@@ -163,8 +163,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .sp-actions button.pinned { color: var(--acc); }
 .sp-menu { position: absolute; right: 8px; top: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); z-index: 10; min-width: 100px; padding: 4px; }
 .sp-menu[hidden] { display: none; }
-.sp-menu button { display: block; width: 100%; text-align: left; background: none; border: none; padding: 7px 12px; font-size: 12.5px; color: var(--txt); cursor: pointer; border-radius: 4px; }
+.sp-menu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: none; padding: 8px 12px; font-size: 13px; color: var(--txt); cursor: pointer; border-radius: 4px; }
 .sp-menu button:hover { background: var(--surface-2); }
+.sp-menu button svg { flex-shrink: 0; opacity: .6; }
 .sp-menu button.danger { color: var(--danger); }
 .sp-menu button.danger:hover { background: var(--danger-soft); }
 

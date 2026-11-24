@@ -412,16 +412,29 @@ async function loadSessionList() {
       <div class="sp-item ${s.id === sid ? 'active' : ''}" data-sid="${s.id}">
         <span class="sp-title">${esc(s.title || '新会话')}</span>
         <span class="sp-actions">
-          <button class="sp-pin ${s.pinned ? 'pinned' : ''}" data-act="pin" title="${s.pinned ? '取消置顶' : '置顶'}">
+          <button class="sp-pin ${s.pinned ? 'pinned' : ''}" data-act="pin-quick" title="${s.pinned ? '取消置顶' : '置顶'}">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${s.pinned ? 'style="transform:rotate(45deg);transform-origin:center"' : ''}><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
           </button>
           <button class="sp-more-btn" data-act="more" title="更多">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
           </button>
           <div class="sp-menu" hidden>
-            <button data-act="rename">重命名</button>
-            <button data-act="archive">归档</button>
-            <button data-act="del" class="danger">删除</button>
+            <button data-act="pin">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+              <span>${s.pinned ? '取消置顶' : '置顶'}</span>
+            </button>
+            <button data-act="rename">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+              重命名
+            </button>
+            <button data-act="archive">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+              归档
+            </button>
+            <button data-act="del" class="danger">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              删除
+            </button>
           </div>
         </span>
       </div>`).join('');
@@ -442,7 +455,11 @@ async function loadSessionList() {
           menu.hidden = true;
           const act = btn.dataset.act;
           const id = item.dataset.sid;
-          if (act === 'rename') {
+          if (act === 'pin') {
+            const s = sessions.find(x => x.id === id);
+            const nowPinned = s && s.pinned ? false : true;
+            api('/api/sessions/' + id, { method: 'PATCH', body: { pinned: nowPinned } }).then(loadSessionList);
+          } else if (act === 'rename') {
             const t = prompt('新标题：');
             if (t) api('/api/sessions/' + id, { method: 'PATCH', body: { title: t } }).then(loadSessionList);
           } else if (act === 'archive') {
@@ -456,8 +473,8 @@ async function loadSessionList() {
           }
         };
       });
-      // 置顶/取消置顶
-      item.querySelector('[data-act="pin"]').onclick = (e) => {
+      // 快捷置顶/取消置顶
+      item.querySelector('[data-act="pin-quick"]').onclick = (e) => {
         e.stopPropagation();
         const s = sessions.find(x => x.id === item.dataset.sid);
         const nowPinned = s && s.pinned ? false : true;
