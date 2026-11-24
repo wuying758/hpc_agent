@@ -36,6 +36,12 @@ export function initChat() {
       p.hidden = false;
       if (isNarrow) {
         showOvBackdrop(true);
+        // 窄屏：从右侧滑入
+        p.style.transition = 'none';
+        p.style.transform = 'translateX(100%)';
+        p.offsetHeight;
+        p.style.transition = '';
+        p.style.transform = '';
       } else {
         p.style.transition = 'none';
         p.style.marginRight = 'calc(-1 * var(--ov-w))';
@@ -51,8 +57,17 @@ export function initChat() {
     } else {
       // 关闭
       if (isNarrow) {
+        // 窄屏：向右滑出
+        p.style.transition = 'none';
+        p.offsetHeight;
+        p.style.transition = '';
+        p.style.transform = 'translateX(100%)';
         showOvBackdrop(false);
-        p.hidden = true;
+        p.addEventListener('transitionend', function handler() {
+          p.removeEventListener('transitionend', handler);
+          p.hidden = true;
+          p.style.transform = '';
+        });
       } else {
         p.style.transition = 'none';
         p.offsetHeight;
@@ -459,14 +474,32 @@ function showOvBackdrop(show) {
       bd.onclick = () => {
         showOvBackdrop(false);
         const p = document.getElementById('ovPanel');
-        if (p) p.hidden = true;
+        if (p) {
+          p.style.transition = 'none';
+          p.offsetHeight;
+          p.style.transition = '';
+          p.style.transform = 'translateX(100%)';
+          p.addEventListener('transitionend', function h() {
+            p.removeEventListener('transitionend', h);
+            p.hidden = true;
+            p.style.transform = '';
+          });
+        }
         const btn = document.getElementById('ovToggleBtn');
         if (btn) { btn.setAttribute('aria-expanded','false'); btn.style.borderColor=''; btn.style.color=''; }
       };
       document.body.appendChild(bd);
     }
     bd.hidden = false;
+    bd.offsetHeight;
+    bd.classList.add('ov-show');
   } else {
-    if (bd) bd.hidden = true;
+    if (bd) {
+      bd.classList.remove('ov-show');
+      bd.addEventListener('transitionend', function h() {
+        bd.removeEventListener('transitionend', h);
+        bd.hidden = true;
+      });
+    }
   }
 }
