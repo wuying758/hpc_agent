@@ -12,7 +12,7 @@ function startPoll() {
   stopTasks();
   pollTimer = setInterval(() => {
     // 只有有 running 任务时才轮询
-    const hasRunning = document.querySelector('.pill-running-task');
+    const hasRunning = document.querySelector('#taskList .pill-running');
     if (hasRunning) loadTasks();
   }, 3000);
 }
@@ -67,15 +67,17 @@ async function loadTaskDetail(id) {
     const sessBtn = document.getElementById('toSession');
     if (sessBtn && t.session_id) sessBtn.onclick = () => {
       document.getElementById('drawer').hidden = true;
-      window.location.hash = '#/chat';
-      // 触发 chat 加载该会话
-      window.__loadSession?.(t.session_id);
+      window.__loadSession(t.session_id);
     };
   } catch (e) { console.error(e); }
 }
 
 export function bindTasksEvents() {
   const form = document.getElementById('taskForm');
+  document.getElementById('taskNewBtn').onclick = () => {
+    form.hidden = false;
+    document.getElementById('taskTitle').focus();
+  };
   const btn = document.getElementById('taskStart');
   if (btn) btn.onclick = async () => {
     const title = document.getElementById('taskTitle').value.trim();

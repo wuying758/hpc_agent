@@ -1,242 +1,315 @@
 // 智能分析（对话）
-import { state, navigate } from './store.js';
-import { esc, fmt, renderMarkdown, statePill, openDrawer, closeDrawer, api, relTime } from './utils.js';
+import { state } from './store.js';
+import { esc, renderMarkdown, api } from './utils.js';
+import { isNarrowLayout, setPanelOpen } from './panels.js';
 
-let sid = null, busy = false, curAbort = null, pendingQueue = [];
-let curBatch = null, curText = null, curReason = null, lastRender = 0, taskSteps = [];
+let sid = null, busy = false, pendingQueue = [];
+let activeRun = null, viewVersion = 0, sessionLoad = null, sessionLoading = false;
+let sessionListVersion = 0;
 
 const $msgs = () => document.getElementById('msgs');
 const $q = () => document.getElementById('q');
 const $send = () => document.getElementById('sendBtn');
 
 export function initChat() {
-  // 恢复会话
-  try { sid = localStorage.getItem('sid') || null; } catch {}
-  if (sid) loadSession(sid);
-
-  // 发送
-  $send().onclick = () => { if (busy) curAbort?.abort(); else send(); };
+  showWelcome();
+  setStopUI(false);
+  $send().onclick = () => {
+    if (busy) {
+      pendingQueue = [];
+      renderQueue();
+      activeRun?.controller.abort();
+    } else send();
+  };
   $q().addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-  });
-  $q().addEventListener('input', autoGrow);
-  $send().innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>';
-
-  // 会话面板
-  document.getElementById('sessBtn').onclick = toggleSessionPanel;
-  document.getElementById('sessClose').onclick = toggleSessionPanel;
-  document.getElementById('sessNew').onclick = () => { sid = null; try{localStorage.removeItem('sid')}catch{}; $msgs().innerHTML = '<div class="chat-content"></div>'; showWelcome(); loadSessionList(); };
-  // 总览开关（带滑动动画）
-  const ovBtn = document.getElementById('ovToggleBtn');
-  if (ovBtn) ovBtn.addEventListener('click', () => {
-    const p = document.getElementById('ovPanel');
-    const isNarrow = window.innerWidth < 1100;
-    if (p.hidden) {
-      // 打开
-      p.hidden = false;
-      if (isNarrow) {
-        showOvBackdrop(true);
-        // 窄屏：从右侧滑入
-        p.style.transition = 'none';
-        p.style.transform = 'translateX(100%)';
-        p.offsetHeight;
-        p.style.transition = '';
-        p.style.transform = '';
-      } else {
-        p.style.transition = 'none';
-        p.style.marginRight = 'calc(-1 * var(--ov-w))';
-        p.style.opacity = '0';
-        p.offsetHeight;
-        p.style.transition = '';
-        p.style.marginRight = '';
-        p.style.opacity = '';
-      }
-      ovBtn.setAttribute('aria-expanded', 'true');
-      ovBtn.style.borderColor = 'var(--acc)';
-      ovBtn.style.color = 'var(--acc)';
-    } else {
-      // 关闭
-      if (isNarrow) {
-        // 窄屏：向右滑出
-        p.style.transition = 'none';
-        p.offsetHeight;
-        p.style.transition = '';
-        p.style.transform = 'translateX(100%)';
-        showOvBackdrop(false);
-        p.addEventListener('transitionend', function handler() {
-          p.removeEventListener('transitionend', handler);
-          p.hidden = true;
-          p.style.transform = '';
-        });
-      } else {
-        p.style.transition = 'none';
-        p.offsetHeight;
-        p.style.transition = '';
-        p.style.marginRight = 'calc(-1 * var(--ov-w))';
-        p.style.opacity = '0';
-        p.addEventListener('transitionend', function handler() {
-          p.removeEventListener('transitionend', handler);
-          p.hidden = true;
-          p.style.marginRight = '';
-          p.style.opacity = '';
-        });
-      }
-      ovBtn.setAttribute('aria-expanded', 'false');
-      ovBtn.style.borderColor = '';
-      ovBtn.style.color = '';
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      send();
     }
   });
+  $q().addEventListener('input', autoGrow);
+  document.getElementById('sessNew').onclick = startNewSession;
+  document.getElementById('newChatBtn').onclick = startNewSession;
+  document.getElementById('sessionPanel').addEventListener('panel-open', loadSessionList);
+  document.getElementById('noticeDismiss').onclick = () => showChatNotice('');
+  document.addEventListener('mousedown', e => {
+    if (!e.target.closest('.sp-menu, [data-act="more"]')) closeSessionMenus();
+  });
+  document.addEventListener('scroll', () => closeSessionMenus(), true);
   loadSessionList();
 
-  // 模型选择
   const sel = document.getElementById('modelSel');
   api('/api/models').then(d => {
-    sel.innerHTML = d.models.map(m => `<option value="${m}" ${m === d.default ? 'selected' : ''}>${m}</option>`).join('');
-    try { const saved = localStorage.getItem('model'); if (saved) sel.value = saved; } catch {}
+    sel.replaceChildren(...d.models.map(model => new Option(model, model, false, model === d.default)));
+    try {
+      const saved = localStorage.getItem('model');
+      if (saved && d.models.includes(saved)) sel.value = saved;
+    } catch {}
   }).catch(() => {});
   sel.onchange = () => { try { localStorage.setItem('model', sel.value); } catch {} };
-
-  // 上下文
   updateCtx(null);
+  let saved;
+  try { saved = localStorage.getItem('sid'); } catch {}
+  if (saved) loadSession(saved, { initial: true });
+}
+
+function selectSession(id, title = '基于集群数据的自然语言问答与诊断') {
+  sid = id;
+  state.sessionId = id;
+  try {
+    if (id) localStorage.setItem('sid', id);
+    else localStorage.removeItem('sid');
+  } catch {}
+  document.getElementById('chatSessionTitle').textContent = title;
+}
+
+function changeConversation() {
+  viewVersion++;
+  sessionLoad?.abort();
+  sessionLoad = null;
+  sessionLoading = false;
+  if (activeRun) {
+    activeRun.controller.abort();
+    activeRun.finish('已停止');
+    activeRun = null;
+  }
+  busy = false;
+  pendingQueue = [];
+  renderQueue();
+  setStopUI(false);
+  closeSessionMenus();
+  return viewVersion;
+}
+
+function startNewSession() {
+  changeConversation();
+  selectSession(null);
+  $q().value = '';
+  autoGrow();
+  updateCtx(null);
+  showChatNotice('');
+  showWelcome();
+  if (isNarrowLayout()) setPanelOpen('sessionPanel', false);
+  loadSessionList();
+  $q().focus();
+}
+
+function showChatNotice(message, { error = false, retry = null } = {}) {
+  const notice = document.getElementById('chatNotice');
+  notice.hidden = !message;
+  notice.classList.toggle('is-error', error);
+  notice.setAttribute('role', error ? 'alert' : 'status');
+  document.getElementById('chatNoticeText').textContent = message;
+  const button = document.getElementById('noticeRetry');
+  button.hidden = !retry;
+  button.onclick = retry;
 }
 
 function showWelcome() {
-  $msgs().innerHTML = `
-    <div class="chat-content">
-      <div class="welcome">
-        <h2>从作业数据中找到线索</h2>
-        <p>基于 SJTU HPC 集群的真实作业记录，定位超时、排队、反复失败等低效作业。</p>
-        <div class="welcome-grid">
-          <div class="welcome-card" onclick="window.__chatSend('最近7天集群整体情况如何？')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 5-9"/></svg>
-            <span class="wc-title">集群概况</span>
-            <span class="wc-desc">总作业量、状态分布、资源浪费</span>
-          </div>
-          <div class="welcome-card" onclick="window.__chatSend('最近7天运行最久的超时作业有哪些？')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-            <span class="wc-title">超时排查</span>
-            <span class="wc-desc">找出超过时限仍在运行的作业</span>
-          </div>
-          <div class="welcome-card" onclick="window.__chatSend('最近7天哪些用户反复失败？')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>
-            <span class="wc-title">反复失败</span>
-            <span class="wc-desc">同用户同作业多次失败的组</span>
-          </div>
-          <div class="welcome-card" onclick="const id=prompt('输入作业ID');if(id)window.__chatSend('诊断作业 #'+id)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-            <span class="wc-title">单作业诊断</span>
-            <span class="wc-desc">输入作业 ID，分析低效原因</span>
-          </div>
-        </div>
-      </div>
-    </div>`;
+  const cards = [
+    ['集群概况', '了解作业规模与资源分布', '最近7天集群整体情况如何？', '<path d="M3 3v18h18M7 16l4-8 4 4 5-9"/>'],
+    ['超时排查', '定位达到运行时限的作业', '最近7天运行最久的超时作业有哪些？', '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'],
+    ['反复失败', '追踪重复失败与共同原因', '最近7天哪些用户反复失败？', '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 8a7 7 0 0 1 12-2l2 3M4 15l2 3a7 7 0 0 0 12-2"/>'],
+    ['单作业诊断', '从作业 ID 开始深入分析', '', '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>'],
+  ];
+  $msgs().innerHTML = `<div class="chat-content"><section class="welcome">
+    <span class="welcome-eyebrow">HPC · 作业分析助手</span>
+    <h2>从作业数据中找到线索</h2>
+    <p>了解集群运行情况，定位低效作业。<br>选择一个问题开始，或在下方描述你想排查的内容。</p>
+    <div class="welcome-grid">${cards.map(([title, desc, question, icon], i) => `
+      <button type="button" class="welcome-card" data-card="${i}">
+        <span class="wc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon}</svg></span>
+        <span class="wc-title">${title}</span><span class="wc-desc">${desc}</span>
+        <svg class="wc-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
+      </button>`).join('')}</div>
+  </section></div>`;
+  $msgs().querySelectorAll('[data-card]').forEach(button => {
+    button.onclick = () => {
+      const question = cards[+button.dataset.card][2];
+      if (question) window.__chatSend(question);
+      else {
+        const id = prompt('输入作业 ID：')?.trim();
+        if (id) window.__chatSend(`诊断作业 #${id}`);
+      }
+    };
+  });
 }
 
 function autoGrow() {
   const q = $q();
   q.style.height = 'auto';
-  q.style.height = Math.min(q.scrollHeight, 160) + 'px';
+  q.style.height = Math.min(q.scrollHeight, 180) + 'px';
 }
 
-window.__chatSend = (msg) => {
-  if (msg) { $q().value = msg; send(); }
+window.__chatSend = message => {
+  if (!message || sessionLoading) return;
+  $q().value = message;
+  send();
 };
 
 function send() {
-  const msg = $q().value.trim();
-  if (!msg) return;
-  if (busy) { pendingQueue.push(msg); renderQueue(); return; }
-  $q().value = ''; autoGrow();
-  doSend(msg);
+  const message = $q().value.trim();
+  if (!message || sessionLoading) return;
+  $q().value = '';
+  autoGrow();
+  if (busy) {
+    pendingQueue.push(message);
+    renderQueue();
+  } else doSend(message);
 }
 
 async function doSend(message) {
-  busy = true; setStopUI(true);
-  taskSteps = [];
+  const version = viewVersion;
+  const controller = new AbortController();
+  const run = { controller, finish: null };
+  activeRun = run;
+  busy = true;
+  setStopUI(true);
+  showChatNotice('');
   addMsg('user', message);
   const { bubble } = addMsg('ai', '');
-  let curBatch2 = null, curText2 = null, curReason2 = null;
-
-  const ensureText = () => { if (!curText2) curText2 = newTextSeg(bubble); return curText2; };
-  const ensureReason = () => {
-    if (curReason2) return curReason2;
-    const box = document.createElement('details');
-    box.className = 'reasoning'; box.open = true;
-    const sum = document.createElement('summary');
-    sum.textContent = '正在分析…';
-    box.appendChild(sum);
-    const body = document.createElement('div');
-    body.className = 'reasoning-body';
-    box.appendChild(body);
-    bubble.appendChild(box);
-    curReason2 = { el: box, body };
-    return curReason2;
-  };
+  const activity = document.createElement('div');
+  activity.className = 'response-activity';
+  activity.innerHTML = '<span></span>正在分析你的问题';
+  bubble.appendChild(activity);
+  let batch = null, text = null, reason = null, lastRender = 0, gotContent = false;
+  const isCurrent = () => activeRun === run && version === viewVersion;
+  const ensureText = () => text || (text = newTextSeg(bubble));
+  const renderText = () => { if (text) text.body.innerHTML = renderMarkdown(text.text); };
   const closeReason = () => {
-    if (!curReason2) return;
-    curReason2.el.open = false;
-    curReason2.el.querySelector('summary').textContent = '推理过程';
-    curReason2 = null;
+    if (!reason) return;
+    reason.el.open = false;
+    reason.el.querySelector('summary').textContent = '推理过程';
+    reason = null;
   };
-  const renderText = () => { if (curText2) curText2.body.innerHTML = renderMarkdown(curText2.text); };
-  const renderThrottled = () => { const now = Date.now(); if (now - lastRender > 80) { lastRender = now; renderText(); scrollBottom(); } };
-
-  const ac = new AbortController();
-  curAbort = ac;
+  const ensureReason = () => {
+    if (reason) return reason;
+    const el = document.createElement('details');
+    el.className = 'reasoning';
+    el.open = true;
+    el.innerHTML = '<summary>正在分析…</summary><div class="reasoning-body"></div>';
+    bubble.appendChild(el);
+    return (reason = { el, body: el.querySelector('.reasoning-body') });
+  };
+  run.finish = label => {
+    activity.remove();
+    renderText();
+    closeReason();
+    if (batch) {
+      batch.status.textContent = label;
+      batch.status.className = 'tf-status interrupted';
+      batch.seg.open = false;
+    }
+    const note = document.createElement('p');
+    note.className = 'message-note';
+    note.textContent = label;
+    bubble.appendChild(note);
+  };
+  const handleEvent = ev => {
+    if (['text', 'reasoning', 'batch_start', 'narrate', 'tool'].includes(ev.t)) {
+      activity.remove();
+      gotContent = true;
+    }
+    if (ev.t === 'reasoning') ensureReason().body.textContent += ev.d;
+    if (ev.t === 'text') {
+      closeReason();
+      ensureText().text += ev.d;
+      const now = Date.now();
+      if (now - lastRender > 80) { lastRender = now; renderText(); }
+    }
+    if (ev.t === 'batch_start') {
+      renderText();
+      closeReason();
+      text = null;
+      batch = newBatchSeg(bubble, ev.count);
+    }
+    if (ev.t === 'narrate') {
+      if (!batch) batch = newBatchSeg(bubble, 1);
+      batchItemStart(batch, ev.d);
+    }
+    if (ev.t === 'tool' && batch) batchItemDone(batch, ev.result);
+    if (ev.t === 'batch_end' && batch) {
+      setBatchDone(batch);
+      batch = null;
+      text = null;
+    }
+    if (ev.t === 'suggest') setQuickItems(ev.items, bubble);
+    if (ev.t === 'title') document.getElementById('chatSessionTitle').textContent = ev.title;
+    if (ev.t === 'done') {
+      if (ev.session_id) selectSession(ev.session_id, document.getElementById('chatSessionTitle').textContent);
+      updateCtx(ev.context);
+      loadSessionList();
+    }
+    if (ev.t === 'error') throw new Error(ev.d || ev.error || '回复生成失败');
+    scrollBottom();
+  };
 
   try {
+    // 先取得会话 ID，首次回复被停止后仍可在同一会话继续。
+    if (!sid) {
+      const created = await api('/api/sessions', {
+        method: 'POST', body: { title: message.slice(0, 30) }, signal: controller.signal,
+      });
+      if (!isCurrent()) return;
+      selectSession(created.id, message.slice(0, 30));
+      loadSessionList();
+    }
+    const requestSid = sid;
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sid, message, model: document.getElementById('modelSel').value }),
-      signal: ac.signal,
+      body: JSON.stringify({ session_id: requestSid, message, model: document.getElementById('modelSel').value }),
+      signal: controller.signal,
     });
+    if (!isCurrent()) return;
+    if (!res.ok) throw new Error(`请求失败（${res.status}）：${await res.text()}`);
     const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '', gotAny = false;
+    const decoder = new TextDecoder();
+    let buffer = '';
     while (true) {
       const { done, value } = await reader.read();
+      if (!isCurrent()) return;
       if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i); buf = buf.slice(i + 1);
-        if (!line.trim()) continue;
-        const ev = JSON.parse(line);
-        gotAny = true;
-        if (ev.t === 'reasoning') { const r = ensureReason(); r.body.textContent += ev.d; }
-        if (ev.t === 'text') { closeReason(); const ts = ensureText(); ts.text += ev.d; ts.hasContent = true; renderThrottled(); }
-        if (ev.t === 'batch_start') { closeReason(); curText2 = null; curBatch2 = newBatchSeg(bubble, ev.count); scrollBottom(); }
-        if (ev.t === 'narrate') { if (!curBatch2) curBatch2 = newBatchSeg(bubble, 1); batchItemStart(curBatch2, ev.d); taskSteps.push({ type: 'narrate', name: ev.d }); scrollBottom(); }
-        if (ev.t === 'tool') { if (curBatch2) { batchItemDone(curBatch2, ev.result); taskSteps.push({ type: 'tool', name: ev.d, result: (ev.result||'').slice(0,500) }); } scrollBottom(); }
-        if (ev.t === 'batch_end') { if (curBatch2) { setBatchDone(curBatch2); curBatch2 = null; curText2 = null; } scrollBottom(); }
-        if (ev.t === 'suggest') { setQuickItems(ev.items); }
-        if (ev.t === 'title') { /* 会话标题已更新，下次刷新列表时生效 */ }
-        if (ev.t === 'done') {
-          sid = ev.session_id;
-          try { localStorage.setItem('sid', sid); } catch {}
-          updateCtx(ev.context);
-          loadSessionList();
-        }
-        scrollBottom();
+      buffer += decoder.decode(value, { stream: true });
+      let end;
+      while ((end = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 1);
+        if (line.trim()) handleEvent(JSON.parse(line));
       }
     }
-    if (curBatch2) setBatchDone(curBatch2);
+    buffer += decoder.decode();
+    if (buffer.trim()) handleEvent(JSON.parse(buffer));
+    activity.remove();
+    closeReason();
+    if (batch) setBatchDone(batch);
     renderText();
-    if (!gotAny) ensureText().body.innerHTML = '<p style="color:var(--dimmer)">（无回复）</p>';
-  } catch (e) {
-    if (e.name === 'AbortError') {
-      const ts = curText2 || ensureText();
-      ts.body.innerHTML = (curText2?.text ? renderMarkdown(curText2.text) : '') + '<p style="color:var(--dimmer)">已停止</p>';
-    } else {
-      ensureText().body.innerHTML = `<p style="color:var(--danger)">${esc(e.message)}</p>`;
+    if (!gotContent) run.finish('未收到回复，请重新发送。');
+  } catch (error) {
+    if (!isCurrent()) return;
+    if (error.name === 'AbortError') run.finish('已停止');
+    else {
+      run.finish('回复未完成');
+      const note = document.createElement('p');
+      note.className = 'message-note is-error';
+      note.textContent = error.message;
+      bubble.appendChild(note);
+      pendingQueue = [];
+      renderQueue();
     }
   } finally {
-    busy = false; curAbort = null;
-    setStopUI(false);
+    if (activeRun === run) {
+      activeRun = null;
+      busy = false;
+      setStopUI(false);
+    }
   }
-  if (pendingQueue.length) { const next = pendingQueue.shift(); renderQueue(); setTimeout(() => doSend(next), 200); return; }
-  $q().focus();
+  if (version !== viewVersion) return;
+  if (pendingQueue.length) {
+    const next = pendingQueue.shift();
+    renderQueue();
+    doSend(next);
+  } else if (state.page === 'chat') $q().focus();
 }
 
 function addMsg(role, text) {
@@ -309,7 +382,7 @@ function setBatchDone(b) {
   b.seg.open = false; // 完成后折叠
 }
 
-function setQuickItems(items) {
+function setQuickItems(items, bubble) {
   if (!Array.isArray(items) || !items.length) return;
   const div = document.createElement('div');
   div.className = 'quick-items';
@@ -319,27 +392,39 @@ function setQuickItems(items) {
     b.onclick = () => { $q().value = it; send(); };
     div.appendChild(b);
   });
-  const msgs = $msgs();
-  const last = msgs.querySelector('.msg.ai:last-child .bubble');
-  if (last) last.appendChild(div);
+  bubble.appendChild(div);
   scrollBottom();
 }
 
 function renderQueue() {
   let el = document.getElementById('queueWrap');
-  if (!el) { el = document.createElement('div'); el.id = 'queueWrap'; el.className = 'composer-inner'; document.getElementById('composer').insertBefore(el, document.getElementById('composer').querySelector('.composer-inner')); }
-  if (!pendingQueue.length) { el.innerHTML = ''; return; }
-  el.innerHTML = `<div style="font-size:12px;color:var(--warn);margin-bottom:6px">排队中（${pendingQueue.length}）</div>` +
-    pendingQueue.map((t, i) => `<div style="font-size:12px;padding:4px 8px;background:var(--surface-2);border-radius:4px;margin-bottom:4px;display:flex;justify-content:space-between"><span>${esc(t.slice(0,40))}</span><button style="border:none;background:none;color:var(--danger);font-size:11px;cursor:pointer" onclick="window.__cancelQ(${i})">撤销</button></div>`).join('');
+  if (!el && !pendingQueue.length) return;
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'queueWrap';
+    el.className = 'composer-inner queue-wrap';
+    document.getElementById('composer').prepend(el);
+  }
+  el.hidden = !pendingQueue.length;
+  el.innerHTML = pendingQueue.map((text, i) => `
+    <div class="queue-item"><span>待发送 · ${esc(text)}</span>
+      <button type="button" data-index="${i}">撤销</button></div>`).join('');
+  el.querySelectorAll('button').forEach(button => {
+    button.onclick = () => { pendingQueue.splice(+button.dataset.index, 1); renderQueue(); };
+  });
 }
-window.__cancelQ = (i) => { pendingQueue.splice(i, 1); renderQueue(); };
 
 function setStopUI(on) {
   const btn = $send();
   btn.innerHTML = on
-    ? '<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
+    ? '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'
     : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>';
-  btn.title = on ? '停止' : '发送';
+  btn.classList.toggle('stop-mode', on);
+  btn.title = on ? '停止回复' : '发送';
+  btn.setAttribute('aria-label', btn.title);
+  btn.disabled = sessionLoading;
+  $q().disabled = sessionLoading;
+  state.busy = on;
 }
 
 function updateCtx(pct) {
@@ -352,244 +437,194 @@ function scrollBottom() {
   requestAnimationFrame(() => { m.scrollTop = m.scrollHeight; });
 }
 
-// 会话面板
-function toggleSessionPanel() {
-  const p = document.getElementById('sessionPanel');
-  const isNarrow = window.innerWidth < 1100;
-  if (p.hidden) {
-    p.hidden = false;
-    if (isNarrow) {
-      showOvBackdrop(true);
-      p.style.transition = 'none';
-      p.style.transform = 'translateX(-100%)';
-      p.offsetHeight;
-      p.style.transition = '';
-      p.style.transform = '';
-    } else {
-      p.style.transition = 'none';
-      p.style.marginLeft = 'calc(-1 * 260px)';
-      p.style.opacity = '0';
-      p.offsetHeight;
-      p.style.transition = '';
-      p.style.marginLeft = '';
-      p.style.opacity = '';
-    }
-    loadSessionList();
-  } else {
-    if (isNarrow) {
-      p.style.transition = 'none';
-      p.offsetHeight;
-      p.style.transition = '';
-      p.style.transform = 'translateX(-100%)';
-      showOvBackdrop(false);
-      p.addEventListener('transitionend', function handler() {
-        p.removeEventListener('transitionend', handler);
-        p.hidden = true;
-        p.style.transform = '';
-      });
-    } else {
-      p.style.transition = 'none';
-      p.offsetHeight;
-      p.style.transition = '';
-      p.style.marginLeft = 'calc(-1 * 260px)';
-      p.style.opacity = '0';
-      p.addEventListener('transitionend', function handler() {
-        p.removeEventListener('transitionend', handler);
-        p.hidden = true;
-        p.style.marginLeft = '';
-        p.style.opacity = '';
-      });
-    }
-  }
+function closeSessionMenus(except = null) {
+  document.querySelectorAll('.sp-menu:not([hidden])').forEach(menu => {
+    if (menu !== except) menu.hidden = true;
+  });
 }
 
 async function loadSessionList() {
+  const version = ++sessionListVersion;
   const list = document.getElementById('spList');
+  const archivedList = document.getElementById('spArchivedList');
   try {
     const sessions = await api('/api/sessions');
-    if (!sessions.length) { list.innerHTML = '<div class="empty">暂无会话</div>'; return; }
-    list.innerHTML = sessions.map(s => `
+    if (version !== sessionListVersion) return;
+    const active = sessions.filter(s => !s.archived);
+    const archived = sessions.filter(s => s.archived);
+    list.innerHTML = active.length ? active.map(renderSpItem).join('') : '<div class="empty">暂无会话</div>';
+    archivedList.innerHTML = archived.length ? archived.map(renderSpItem).join('') : '<div class="empty archive-empty">暂无归档会话</div>';
+    bindSpItems(list, sessions);
+    bindSpItems(archivedList, sessions);
+    const toggle = document.getElementById('spArchivedToggle');
+    toggle.onclick = () => {
+      const open = archivedList.hidden;
+      archivedList.hidden = !open;
+      archivedList.classList.toggle('open', open);
+      toggle.classList.toggle('open', open);
+      toggle.setAttribute('aria-expanded', String(open));
+    };
+  } catch (error) {
+    if (version !== sessionListVersion) return;
+    list.innerHTML = '<div class="empty">会话列表加载失败<br><button class="btn btn-sm">重试</button></div>';
+    list.querySelector('button').onclick = loadSessionList;
+  }
+}
+
+function renderSpItem(s) {
+  const isArchived = !!s.archived;
+  // 快捷按钮：归档的显示“取消归档”图标，未归档的显示“置顶”图标
+  const quickBtn = isArchived
+    ? `<button class="sp-quick" data-act="unarchive-quick" title="取消归档">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
+      </button>`
+    : `<button class="sp-pin ${s.pinned ? 'pinned' : ''}" data-act="pin-quick" title="${s.pinned ? '取消置顶' : '置顶'}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${s.pinned ? 'style="transform:rotate(45deg);transform-origin:center"' : ''}><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+      </button>`;
+
+  // 菜单项：归档的没有置顶，有取消归档；未归档的有置顶和归档
+  const menuItems = `
+    ${!isArchived ? `<button data-act="pin">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${s.pinned ? 'style="transform:rotate(45deg);transform-origin:center"' : ''}><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+      <span>${s.pinned ? '取消置顶' : '置顶'}</span>
+    </button>` : ''}
+    <button data-act="rename">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+      重命名
+    </button>
+    <button data-act="archive">
+      ${isArchived
+        ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg><span>取消归档</span>`
+        : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg><span>归档</span>`}
+    </button>
+    <button data-act="del" class="danger">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      删除
+    </button>`;
+
+  return `
       <div class="sp-item ${s.id === sid ? 'active' : ''}" data-sid="${s.id}">
-        <span class="sp-title">${esc(s.title || '新会话')}</span>
+        <span class="sp-title" title="${esc(s.title || '新会话')}">${esc(s.title || '新会话')}</span>
         <span class="sp-actions">
-          <button class="sp-pin ${s.pinned ? 'pinned' : ''}" data-act="pin-quick" title="${s.pinned ? '取消置顶' : '置顶'}">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${s.pinned ? 'style="transform:rotate(45deg);transform-origin:center"' : ''}><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
-          </button>
-          <button class="sp-more-btn" data-act="more" title="更多">
+          ${quickBtn}
+          <button class="sp-more-btn" data-act="more" title="更多" aria-label="会话操作" aria-haspopup="menu">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
           </button>
-          <div class="sp-menu" hidden>
-            <button data-act="pin">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${s.pinned ? 'style="transform:rotate(45deg);transform-origin:center"' : ''}><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
-              <span>${s.pinned ? '取消置顶' : '置顶'}</span>
-            </button>
-            <button data-act="rename">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
-              重命名
-            </button>
-            <button data-act="archive">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>
-              归档
-            </button>
-            <button data-act="del" class="danger">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-              删除
-            </button>
-          </div>
+          <div class="sp-menu" role="menu" hidden>${menuItems}</div>
         </span>
-      </div>`).join('');
+      </div>`;
+}
 
-    list.querySelectorAll('.sp-item').forEach(item => {
-      const menu = item.querySelector('.sp-menu');
-      // 点“...”开关菜单
-      item.querySelector('[data-act="more"]').onclick = (e) => {
+function patchSession(id, fields) {
+  return api('/api/sessions/' + encodeURIComponent(id), { method: 'PATCH', body: fields })
+    .then(async () => { await loadSessionList(); return true; })
+    .catch(error => {
+      showChatNotice('会话操作失败：' + error.message, { error: true });
+      return false;
+    });
+}
+
+function bindSpItems(list, sessions) {
+  list.querySelectorAll('.sp-item').forEach(item => {
+    const id = item.dataset.sid;
+    const session = sessions.find(s => s.id === id);
+    const menu = item.querySelector('.sp-menu');
+    const more = item.querySelector('[data-act="more"]');
+    more.onclick = e => {
+      e.stopPropagation();
+      const open = menu.hidden;
+      closeSessionMenus();
+      if (!open) return;
+      menu.hidden = false;
+      const rect = more.getBoundingClientRect();
+      const height = menu.offsetHeight;
+      menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+      menu.style.top = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - height - 8)) + 'px';
+    };
+    menu.querySelectorAll('button').forEach(button => {
+      button.onclick = async e => {
         e.stopPropagation();
-        // 关闭其他菜单
-        list.querySelectorAll('.sp-menu[hidden=false]').forEach(m => { if (m !== menu) m.hidden = true; });
-        menu.hidden = !menu.hidden;
-      };
-      // 菜单项
-      menu.querySelectorAll('button').forEach(btn => {
-        btn.onclick = (e) => {
-          e.stopPropagation();
-          menu.hidden = true;
-          const act = btn.dataset.act;
-          const id = item.dataset.sid;
-          if (act === 'pin') {
-            const s = sessions.find(x => x.id === id);
-            const nowPinned = s && s.pinned ? false : true;
-            api('/api/sessions/' + id, { method: 'PATCH', body: { pinned: nowPinned } }).then(loadSessionList);
-          } else if (act === 'rename') {
-            const t = prompt('新标题：');
-            if (t) api('/api/sessions/' + id, { method: 'PATCH', body: { title: t } }).then(loadSessionList);
-          } else if (act === 'archive') {
-            api('/api/sessions/' + id, { method: 'PATCH', body: { archived: true } }).then(loadSessionList);
-          } else if (act === 'del') {
-            if (!confirm('删除此会话？')) return;
-            api('/api/sessions/' + id, { method: 'DELETE' }).then(() => {
-              if (sid === id) { sid = null; try{localStorage.removeItem('sid')}catch{}; $msgs().innerHTML = '<div class="chat-content"></div>'; showWelcome(); }
-              loadSessionList();
-            });
+        menu.hidden = true;
+        const action = button.dataset.act;
+        if (action === 'pin') patchSession(id, { pinned: !session.pinned });
+        if (action === 'archive') patchSession(id, { archived: !session.archived });
+        if (action === 'rename') {
+          const title = prompt('会话标题：', session.title || '')?.trim();
+          if (title) {
+            const updated = await patchSession(id, { title });
+            if (updated && sid === id) document.getElementById('chatSessionTitle').textContent = title;
           }
-        };
-      });
-      // 快捷置顶/取消置顶
-      item.querySelector('[data-act="pin-quick"]').onclick = (e) => {
-        e.stopPropagation();
-        const s = sessions.find(x => x.id === item.dataset.sid);
-        const nowPinned = s && s.pinned ? false : true;
-        api('/api/sessions/' + item.dataset.sid, { method: 'PATCH', body: { pinned: nowPinned } }).then(loadSessionList);
-      };
-      // 点行主体 → 打开会话
-      item.onclick = (e) => {
-        if (e.target.closest('.sp-actions')) return;
-        // 关闭所有菜单
-        list.querySelectorAll('.sp-menu[hidden=false]').forEach(m => m.hidden = true);
-        // 窄屏：关闭遮罩
-        if (window.innerWidth < 1100) showOvBackdrop(false);
-        loadSession(item.dataset.sid);
-      };
-    });
-    // 点其他地方关闭菜单
-    document.addEventListener('click', () => {
-      list.querySelectorAll('.sp-menu[hidden=false]').forEach(m => m.hidden = true);
-    });
-  } catch { list.innerHTML = '<div class="empty">加载失败</div>'; }
-}
-
-function relTimeStr(s) {
-  if (!s) return '';
-  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T') + 'Z');
-  return relTime(d.getTime());
-}
-
-async function loadSession(id) {
-  try {
-    const s = await api('/api/sessions/' + id);
-    // 读取成功后再更新 sid
-    sid = id;
-    try { localStorage.setItem('sid', id); } catch {}
-    const msgs = $msgs();
-    msgs.innerHTML = '';
-    if (s.messages) {
-      for (const m of s.messages) {
-        if (m.role === 'user') addMsg('user', m.content);
-        else if (m.role === 'assistant') {
-          const { bubble } = addMsg('ai', '');
-          newTextSeg(bubble).body.innerHTML = renderMarkdown(m.content || '');
         }
+        if (action === 'del' && confirm('删除此会话？')) {
+          if (sid === id) changeConversation();
+          try {
+            await api('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
+            if (sid === id) startNewSession();
+            else loadSessionList();
+          } catch (error) { showChatNotice('删除失败：' + error.message, { error: true }); }
+        }
+      };
+    });
+    item.querySelector('[data-act="pin-quick"]')?.addEventListener('click', e => {
+      e.stopPropagation();
+      patchSession(id, { pinned: !session.pinned });
+    });
+    item.querySelector('[data-act="unarchive-quick"]')?.addEventListener('click', e => {
+      e.stopPropagation();
+      patchSession(id, { archived: false });
+    });
+    item.onclick = e => {
+      if (e.target.closest('.sp-actions')) return;
+      closeSessionMenus();
+      loadSession(id);
+    };
+  });
+}
+
+export async function loadSession(id, { initial = false } = {}) {
+  const version = changeConversation();
+  const controller = new AbortController();
+  sessionLoad = controller;
+  sessionLoading = true;
+  setStopUI(false);
+  showChatNotice('正在打开会话…');
+  if (isNarrowLayout()) setPanelOpen('sessionPanel', false);
+  try {
+    const session = await api('/api/sessions/' + encodeURIComponent(id), { signal: controller.signal });
+    if (version !== viewVersion) return;
+    selectSession(id, session.title || '当前会话');
+    $q().value = '';
+    autoGrow();
+    $msgs().innerHTML = '<div class="chat-content"></div>';
+    if (!session.messages?.length) showWelcome();
+    for (const message of session.messages || []) {
+      if (message.role === 'user') addMsg('user', message.content);
+      if (message.role === 'assistant') {
+        const { bubble } = addMsg('ai', '');
+        if (message.reasoning_content) {
+          const reason = document.createElement('details');
+          reason.className = 'reasoning';
+          reason.innerHTML = `<summary>推理过程</summary><div class="reasoning-body">${esc(message.reasoning_content)}</div>`;
+          bubble.appendChild(reason);
+        }
+        newTextSeg(bubble).body.innerHTML = renderMarkdown(message.content || '');
       }
     }
+    updateCtx(null);
+    showChatNotice('');
     scrollBottom();
-    const sp = document.getElementById('sessionPanel');
-    if (!sp.hidden) {
-      sp.style.transition = 'none';
-      sp.offsetHeight;
-      sp.style.transition = '';
-      sp.style.marginLeft = 'calc(-1 * 260px)';
-      sp.style.opacity = '0';
-      sp.addEventListener('transitionend', function h() {
-        sp.removeEventListener('transitionend', h);
-        sp.hidden = true;
-        sp.style.marginLeft = '';
-        sp.style.opacity = '';
-      });
-    }
-  } catch (e) {
-    console.error('loadSession failed:', e);
-    // 失败时保留当前会话，显示提示
-    const msgs = $msgs();
-    if (msgs.children.length === 0) {
-      msgs.innerHTML = `<div style="text-align:center;padding:20px;color:var(--danger)">会话加载失败：${esc(e.message)}</div>`;
-    }
-  }
-}
-
-// 窄屏面板遮罩
-function showOvBackdrop(show) {
-  let bd = document.getElementById('ovBackdrop');
-  if (show) {
-    if (!bd) {
-      bd = document.createElement('div');
-      bd.id = 'ovBackdrop';
-      bd.className = 'ov-backdrop';
-      bd.onclick = () => {
-        showOvBackdrop(false);
-        // 关闭所有窄屏面板
-        closeNarrowPanel('ovPanel', 'translateX(100%)', 'ovToggleBtn');
-        closeNarrowPanel('sessionPanel', 'translateX(-100%)', null);
-      };
-      document.body.appendChild(bd);
-    }
-    bd.hidden = false;
-    bd.offsetHeight;
-    bd.classList.add('ov-show');
-  } else {
-    if (bd) {
-      bd.classList.remove('ov-show');
-      bd.addEventListener('transitionend', function h() {
-        bd.removeEventListener('transitionend', h);
-        bd.hidden = true;
-      });
-    }
-  }
-}
-
-function closeNarrowPanel(id, transform, btnId) {
-  const p = document.getElementById(id);
-  if (p && !p.hidden) {
-    p.style.transition = 'none';
-    p.offsetHeight;
-    p.style.transition = '';
-    p.style.transform = transform;
-    p.addEventListener('transitionend', function h() {
-      p.removeEventListener('transitionend', h);
-      p.hidden = true;
-      p.style.transform = '';
+    loadSessionList();
+  } catch (error) {
+    if (version !== viewVersion || error.name === 'AbortError') return;
+    if (initial && error.message.startsWith('404 ')) selectSession(null);
+    showChatNotice('会话打开失败：' + error.message, {
+      error: true, retry: () => loadSession(id, { initial }),
     });
-  }
-  if (btnId) {
-    const btn = document.getElementById(btnId);
-    if (btn) { btn.setAttribute('aria-expanded','false'); btn.style.cssText = ''; }
+  } finally {
+    if (version === viewVersion) {
+      sessionLoad = null;
+      sessionLoading = false;
+      setStopUI(busy);
+    }
   }
 }

@@ -11,9 +11,11 @@
 </head>
 <body>
 <!-- 手机导航开关 -->
-<button class="nav-toggle" id="navToggle" aria-label="导航">
+<button type="button" class="nav-toggle" id="navToggle" aria-label="导航" aria-controls="nav">
   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
 </button>
+
+<button type="button" id="navBackdrop" class="nav-backdrop" aria-label="关闭导航" hidden></button>
 
 <!-- 左侧导航 -->
 <aside id="nav">
@@ -47,19 +49,34 @@
     </a>
   </nav>
   <div class="nav-footer">
-    <button id="themeBtn">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-      深色
+    <button id="settingsBtn" title="设置">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      设置
     </button>
   </div>
 </aside>
+
+<!-- 设置面板 -->
+<div id="settingsPanel" class="settings-panel" role="dialog" aria-labelledby="settingsTitle" hidden>
+  <div class="settings-header">
+    <h3 id="settingsTitle">设置</h3>
+    <button class="btn btn-sm" id="settingsClose">关闭</button>
+  </div>
+  <div class="settings-body">
+    <div class="setting-row">
+      <span class="setting-label">主题</span>
+      <button class="btn btn-sm" id="themeBtn">切换到深色</button>
+    </div>
+  </div>
+</div>
+<div id="settingsBackdrop" class="settings-backdrop" hidden></div>
 
 <!-- 主区域 -->
 <main id="main">
   <!-- 智能分析 -->
   <div id="page-chat" class="page">
     <!-- 历史会话侧栏（左侧并列） -->
-    <div id="sessionPanel" class="session-panel" hidden>
+    <aside id="sessionPanel" class="session-panel" aria-label="历史会话" hidden>
       <div class="sp-head">
         <h3>历史会话</h3>
         <div class="sp-head-actions">
@@ -68,15 +85,26 @@
         </div>
       </div>
       <div class="sp-list" id="spList"></div>
-    </div>
+      <div class="sp-archived">
+        <button class="sp-archived-toggle" id="spArchivedToggle" aria-expanded="false" aria-controls="spArchivedList">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          已归档聊天
+        </button>
+        <div class="sp-archived-list" id="spArchivedList" hidden></div>
+      </div>
+    </aside>
     <div class="chat-wrap">
       <!-- 页头 -->
       <div class="chat-header">
         <div>
           <h1>智能分析</h1>
-          <p>基于集群数据的自然语言问答与诊断</p>
+          <p id="chatSessionTitle">基于集群数据的自然语言问答与诊断</p>
         </div>
         <div class="chat-header-actions">
+          <button type="button" class="btn btn-sm new-chat-btn" id="newChatBtn" title="新建会话" aria-label="新建会话">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            <span>新会话</span>
+          </button>
           <button class="btn btn-sm" id="ovToggleBtn" title="集群总览">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 5-9"/></svg>
             总览
@@ -87,14 +115,21 @@
           </button>
         </div>
       </div>
+      <div id="chatNotice" class="chat-notice" role="status" hidden>
+        <span id="chatNoticeText"></span>
+        <button type="button" id="noticeRetry" hidden>重试</button>
+        <button type="button" id="noticeDismiss" class="notice-dismiss" aria-label="关闭提示">&times;</button>
+      </div>
       <!-- 消息区 -->
       <div id="msgs"><div class="chat-content"></div></div>
       <!-- 输入区 -->
       <div id="composer" class="composer">
         <div class="composer-inner">
           <div class="composer-card">
-            <textarea id="q" rows="1" placeholder="输入问题，Enter 发送，Shift+Enter 换行" autocomplete="off"></textarea>
+            <label class="sr-only" for="q">分析问题</label>
+            <textarea id="q" rows="1" placeholder="描述你想排查的问题，或输入作业 ID…" autocomplete="off"></textarea>
             <div class="composer-bar">
+              <span class="composer-hint">Enter 发送 <span>·</span> Shift + Enter 换行</span>
               <div class="right">
                 <span class="ctx" id="ctxInfo">上下文 —</span>
                 <select id="modelSel" title="模型"><option value="qwen">qwen</option></select>
@@ -106,16 +141,19 @@
       </div>
     </div>
     <!-- 集群总览侧栏 -->
-    <div id="ovPanel" class="ov-panel">
+    <aside id="ovPanel" class="ov-panel" aria-label="集群总览">
       <div class="ov-panel-head">
         <div class="ov-head-row">
           <h3>集群总览</h3>
-          <select id="ovDaysSel"><option value="7">7 天</option><option value="14">14 天</option><option value="30">30 天</option></select>
+          <div class="ov-head-actions">
+            <select id="ovDaysSel" aria-label="总览时间窗口"><option value="7">7 天</option><option value="14">14 天</option><option value="30">30 天</option></select>
+            <button type="button" class="icon-btn ov-close" id="ovClose" title="关闭总览" aria-label="关闭总览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
+          </div>
         </div>
-        <div class="ov-meta" id="ovMeta">加载中…</div>
       </div>
+      <div class="ov-notice" id="ovNotice" role="status" hidden><span></span><button type="button">重试</button></div>
       <div class="ov-panel-body" id="ovBody"><div class="empty">加载中…</div></div>
-    </div>
+    </aside>
   </div>
 
   <!-- 作业中心 -->
@@ -144,11 +182,11 @@
 
   <!-- 分析任务 -->
   <div id="page-tasks" class="page" hidden>
-    <div class="page-header">
-      <h2>分析任务</h2>
-      <p>发起分析，保存步骤、证据和结论</p>
+    <div class="page-header page-header-actions">
+      <div><h2>分析任务</h2><p>发起分析，保存步骤、证据和结论</p></div>
+      <button type="button" class="btn btn-primary btn-sm" id="taskNewBtn">+ 新建任务</button>
     </div>
-    <div id="taskForm" style="margin-bottom:20px;padding:16px 20px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md)">
+    <div id="taskForm" class="task-form">
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <input id="taskTitle" placeholder="任务标题（如：分析近7天反复失败）" style="flex:1;min-width:200px">
         <select id="taskDays" style="width:100px"><option value="7">7天</option><option value="14">14天</option><option value="30">30天</option></select>

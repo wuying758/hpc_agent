@@ -252,7 +252,7 @@ export async function* agentChat(history, userMsg, { onTool, model } = {}) {
     try {
       res = await llmFetch({ model: useModel,
         messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...msgs],
-        tools: toOpenAITools(), temperature: 0.2, stream: true });
+        tools: toOpenAITools(), temperature: 0.7, stream: true });
     } catch (e) {
       yield { type: 'text', text: '❌ 连接模型服务失败（可能是网络抖动或模型暂时不可用）：' + e.message + '\n\n请稍后重试，或检查服务器到 models.sjtu.edu.cn 的网络。' };
       return;

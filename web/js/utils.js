@@ -1,5 +1,5 @@
 // 工具函数
-export function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+export function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 export function fmt(n) { if (n == null) return '—'; return n >= 10000 ? (n / 10000).toFixed(1) + 'w' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
 export function relTime(ts) {
   if (!ts) return '';
