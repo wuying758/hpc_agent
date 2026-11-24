@@ -22,6 +22,8 @@ function migrate(db) {
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       title TEXT DEFAULT '新会话',
+      pinned INTEGER DEFAULT 0,
+      archived INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -104,6 +106,9 @@ function migrate(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_tev_ticket ON ticket_events(ticket_id);
   `);
+  // 兼容旧库
+  try { db.exec('ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE sessions ADD COLUMN archived INTEGER DEFAULT 0'); } catch {}
 
   // 首次导入：从 data/sessions/*.json 导入旧会话
   importLegacySessions(db);
@@ -158,16 +163,17 @@ function importLegacyTickets(db) {
 export function listSessions({ q, limit = 50 } = {}) {
   const db = getDB();
   let rows;
+  const order = `ORDER BY s.pinned DESC, s.updated_at DESC LIMIT ?`;
   if (q) {
     rows = db.prepare(`SELECT s.*, m.preview FROM sessions s
       LEFT JOIN (SELECT session_id, content as preview, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) rn FROM messages WHERE role='user') m
       ON m.session_id = s.id AND m.rn = 1
-      WHERE s.title LIKE ? OR m.preview LIKE ? ORDER BY s.updated_at DESC LIMIT ?`).all(`%${q}%`, `%${q}%`, limit);
+      WHERE s.title LIKE ? OR m.preview LIKE ? ${order}`).all(`%${q}%`, `%${q}%`, limit);
   } else {
     rows = db.prepare(`SELECT s.*, m.preview FROM sessions s
       LEFT JOIN (SELECT session_id, content as preview, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) rn FROM messages WHERE role='user') m
       ON m.session_id = s.id AND m.rn = 1
-      ORDER BY s.updated_at DESC LIMIT ?`).all(limit);
+      ${order}`).all(limit);
   }
   return rows;
 }
@@ -190,6 +196,19 @@ export function createSession(title = '新会话') {
 export function renameSession(id, title) {
   const db = getDB();
   db.prepare(`UPDATE sessions SET title=?, updated_at=datetime('now') WHERE id=?`).run(title, id);
+}
+
+export function updateSession(id, fields) {
+  const db = getDB();
+  const sets = [];
+  const vals = [];
+  if (fields.title != null) { sets.push('title=?'); vals.push(fields.title); }
+  if (fields.pinned != null) { sets.push('pinned=?'); vals.push(fields.pinned ? 1 : 0); }
+  if (fields.archived != null) { sets.push('archived=?'); vals.push(fields.archived ? 1 : 0); }
+  if (!sets.length) return;
+  sets.push("updated_at=datetime('now')");
+  vals.push(id);
+  db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE id=?`).run(...vals);
 }
 
 export function deleteSession(id) {

@@ -156,7 +156,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET') { const s = store.getSession(id); send(s ? 200 : 404, s || {}); return; }
       if (req.method === 'PATCH') {
         const body = JSON.parse(await new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => r(b)); }));
-        if (body.title) store.renameSession(id, body.title);
+        store.updateSession(id, body);
         send(200, { ok: true }); return;
       }
       if (req.method === 'DELETE') { store.deleteSession(id); send(200, { ok: true }); return; }

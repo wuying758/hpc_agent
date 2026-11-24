@@ -410,30 +410,68 @@ async function loadSessionList() {
     if (!sessions.length) { list.innerHTML = '<div class="empty">暂无会话</div>'; return; }
     list.innerHTML = sessions.map(s => `
       <div class="sp-item ${s.id === sid ? 'active' : ''}" data-sid="${s.id}">
-        <div class="t">${esc(s.title || '新会话')}</div>
-        <div class="m">${s.preview ? esc(s.preview.slice(0, 30)) : ''} · ${relTimeStr(s.updated_at)}</div>
-        <div class="ops">
-          <button data-act="rename">重命名</button>
-          <button data-act="del" style="color:var(--danger)">删除</button>
-        </div>
+        <span class="sp-title">${esc(s.title || '新会话')}</span>
+        <span class="sp-actions">
+          <button class="sp-pin" data-act="pin" title="置顶">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+          </button>
+          <button class="sp-more-btn" data-act="more" title="更多">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+          </button>
+          <div class="sp-menu" hidden>
+            <button data-act="rename">重命名</button>
+            <button data-act="archive">归档</button>
+            <button data-act="del" class="danger">删除</button>
+          </div>
+        </span>
       </div>`).join('');
+
     list.querySelectorAll('.sp-item').forEach(item => {
-      item.onclick = e => {
-        if (e.target.dataset.act === 'del') {
-          if (!confirm('删除此会话？')) return;
-          api('/api/sessions/' + item.dataset.sid, { method: 'DELETE' }).then(() => {
-            if (sid === item.dataset.sid) { sid = null; localStorage.removeItem('sid'); $msgs().innerHTML = ''; showWelcome(); }
-            loadSessionList();
-          });
-          return;
-        }
-        if (e.target.dataset.act === 'rename') {
-          const t = prompt('新标题：');
-          if (t) api('/api/sessions/' + item.dataset.sid, { method: 'PATCH', body: { title: t } }).then(loadSessionList);
-          return;
-        }
+      const menu = item.querySelector('.sp-menu');
+      // 点“...”开关菜单
+      item.querySelector('[data-act="more"]').onclick = (e) => {
+        e.stopPropagation();
+        // 关闭其他菜单
+        list.querySelectorAll('.sp-menu[hidden=false]').forEach(m => { if (m !== menu) m.hidden = true; });
+        menu.hidden = !menu.hidden;
+      };
+      // 菜单项
+      menu.querySelectorAll('button').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          menu.hidden = true;
+          const act = btn.dataset.act;
+          const id = item.dataset.sid;
+          if (act === 'rename') {
+            const t = prompt('新标题：');
+            if (t) api('/api/sessions/' + id, { method: 'PATCH', body: { title: t } }).then(loadSessionList);
+          } else if (act === 'archive') {
+            api('/api/sessions/' + id, { method: 'PATCH', body: { archived: true } }).then(loadSessionList);
+          } else if (act === 'del') {
+            if (!confirm('删除此会话？')) return;
+            api('/api/sessions/' + id, { method: 'DELETE' }).then(() => {
+              if (sid === id) { sid = null; try{localStorage.removeItem('sid')}catch{}; $msgs().innerHTML = '<div class="chat-content"></div>'; showWelcome(); }
+              loadSessionList();
+            });
+          }
+        };
+      });
+      // 置顶
+      item.querySelector('[data-act="pin"]').onclick = (e) => {
+        e.stopPropagation();
+        api('/api/sessions/' + item.dataset.sid, { method: 'PATCH', body: { pinned: true } }).then(loadSessionList);
+      };
+      // 点行主体 → 打开会话
+      item.onclick = (e) => {
+        if (e.target.closest('.sp-actions')) return;
+        // 关闭所有菜单
+        list.querySelectorAll('.sp-menu[hidden=false]').forEach(m => m.hidden = true);
         loadSession(item.dataset.sid);
       };
+    });
+    // 点其他地方关闭菜单
+    document.addEventListener('click', () => {
+      list.querySelectorAll('.sp-menu[hidden=false]').forEach(m => m.hidden = true);
     });
   } catch { list.innerHTML = '<div class="empty">加载失败</div>'; }
 }
