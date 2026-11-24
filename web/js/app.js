@@ -74,6 +74,33 @@ export function initApp() {
   bindOverviewEvents();
   initEvidence();
 
+  // 响应式断点切换：重置面板状态
+  let wasNarrow = window.innerWidth < 1100;
+  window.addEventListener('resize', () => {
+    const isNarrow = window.innerWidth < 1100;
+    if (isNarrow === wasNarrow) return;
+    wasNarrow = isNarrow;
+    // 总览面板：收起并清理 inline style
+    const ov = document.getElementById('ovPanel');
+    if (ov) {
+      ov.hidden = true;
+      ov.style.cssText = '';
+    }
+    // 遮罩：移除
+    const bd = document.getElementById('ovBackdrop');
+    if (bd) bd.remove();
+    // 历史会话：收起并清理
+    const sp = document.getElementById('sessionPanel');
+    if (sp) {
+      sp.hidden = true;
+      sp.style.cssText = '';
+      sp.classList.remove('sp-open');
+    }
+    // 按钮状态重置
+    const ovBtn = document.getElementById('ovToggleBtn');
+    if (ovBtn) { ovBtn.setAttribute('aria-expanded', 'false'); ovBtn.style.cssText = ''; }
+  });
+
   // 暴露给 chat.js 的会话加载
   window.__loadSession = (sid) => {
     const q = document.getElementById('q');
