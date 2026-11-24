@@ -74,27 +74,54 @@ export function initApp() {
   bindOverviewEvents();
   initEvidence();
 
-  // 响应式断点切换：重置面板状态
+  // 响应式断点切换：重置面板状态（带动画）
   let wasNarrow = window.innerWidth < 1100;
   window.addEventListener('resize', () => {
     const isNarrow = window.innerWidth < 1100;
     if (isNarrow === wasNarrow) return;
     wasNarrow = isNarrow;
-    // 总览面板：收起并清理 inline style
+
+    // 总览面板：滑出后隐藏
     const ov = document.getElementById('ovPanel');
-    if (ov) {
-      ov.hidden = true;
-      ov.style.cssText = '';
+    if (ov && !ov.hidden) {
+      ov.style.transition = 'none';
+      ov.offsetHeight;
+      ov.style.transition = '';
+      if (isNarrow) {
+        ov.style.transform = 'translateX(100%)';
+      } else {
+        ov.style.marginRight = 'calc(-1 * var(--ov-w))';
+        ov.style.opacity = '0';
+      }
+      ov.addEventListener('transitionend', function h() {
+        ov.removeEventListener('transitionend', h);
+        ov.hidden = true;
+        ov.style.cssText = '';
+      });
     }
-    // 遮罩：移除
+    // 遮罩：淡出后移除
     const bd = document.getElementById('ovBackdrop');
-    if (bd) bd.remove();
-    // 历史会话：收起并清理
+    if (bd && !bd.hidden) {
+      bd.classList.remove('ov-show');
+      bd.addEventListener('transitionend', function h2() {
+        bd.removeEventListener('transitionend', h2);
+        bd.remove();
+      });
+    }
+    // 历史会话：滑出后隐藏
     const sp = document.getElementById('sessionPanel');
-    if (sp) {
-      sp.hidden = true;
-      sp.style.cssText = '';
-      sp.classList.remove('sp-open');
+    if (sp && !sp.hidden) {
+      sp.style.transition = 'none';
+      sp.offsetHeight;
+      sp.style.transition = '';
+      sp.style.marginLeft = 'calc(-1 * 260px)';
+      sp.style.opacity = '0';
+      sp.addEventListener('transitionend', function h3() {
+        sp.removeEventListener('transitionend', h3);
+        sp.hidden = true;
+        sp.style.cssText = '';
+        sp.classList.remove('sp-open');
+      });
     }
     // 按钮状态重置
     const ovBtn = document.getElementById('ovToggleBtn');
