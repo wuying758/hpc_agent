@@ -14,6 +14,12 @@ export function statePill(state) {
   const cls = 'pill pill-' + (state || 'unknown').toLowerCase().replace(/[^a-z]/g, '_');
   return `<span class="${cls}">${esc(state || 'UNKNOWN')}</span>`;
 }
+// 安全的日期展示：兼容 'YYYY-MM-DD HH:MM:SS' / ISO / null
+export function fmtDateTime(s) {
+  if (!s) return '';
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T') + 'Z');
+  return isNaN(d) ? '' : d.toLocaleString('zh-CN');
+}
 export function renderMarkdown(md) {
   if (!md) return '';
   let h = esc(md);

@@ -4,6 +4,14 @@ import { esc, fmt, statePill, openDrawer, api, relTime } from './utils.js';
 
 export function initJobs() { loadJobsList(); }
 
+// 切换账号后：重置筛选并重新加载
+export function refreshJobs() {
+  state.jState = ''; state.jPartition = ''; state.jDays = 7; state.jSearch = ''; state.jPage = 1;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  set('jStateSel', ''); set('jDaysSel', '7'); set('jSearch', '');
+  loadJobsList();
+}
+
 async function loadJobsList() {
   const tbody = document.querySelector('#jobsTable tbody');
   const info = document.getElementById('jobsInfo');
@@ -27,7 +35,8 @@ async function loadJobsList() {
     </tr>`).join('') || '<tr><td colspan="8" class="empty">无结果</td></tr>';
     if (tbody) tbody.querySelectorAll('tr[data-jid]').forEach(tr => tr.onclick = () => loadJobDetail(tr.dataset.jid));
   } catch (e) {
-    if (tbody) tbody.innerHTML = `<tr><td colspan="8" style="color:var(--danger)">加载失败: ${esc(e.message)}</td></tr>`;
+    const msg = e.message?.startsWith('401') ? '请先登录 JAccount' : `加载失败: ${e.message}`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8" style="color:var(--danger)">${esc(msg)}</td></tr>`;
   }
 }
 

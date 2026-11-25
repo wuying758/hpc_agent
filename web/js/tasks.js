@@ -1,12 +1,21 @@
 // 分析任务中心
 import { state } from './store.js';
-import { esc, fmt, statePill, openDrawer, renderMarkdown, api } from './utils.js';
+import { esc, fmt, statePill, openDrawer, renderMarkdown, api, fmtDateTime } from './utils.js';
 
 let pollTimer = null;
 
 export function initTasks() { loadTasks(); startPoll(); }
 
 export function stopTasks() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+// 切换账号后：停止旧轮询、清空并重新加载当前用户任务
+export function refreshTasks() {
+  stopTasks();
+  const form = document.getElementById('taskForm');
+  if (form) form.hidden = true;
+  loadTasks();
+  startPoll();
+}
 
 function startPoll() {
   stopTasks();
@@ -29,10 +38,10 @@ async function loadTasks() {
           <span class="tc-title">${esc(t.title)}</span>
           <span class="pill pill-${t.status}">${{ running: '运行中', completed: '已完成', interrupted: '已中断', failed: '失败', cancelled: '已取消' }[t.status] || t.status}</span>
         </div>
-        <div class="tc-meta">${t.days}天 · ${new Date(t.created_at.includes('T') ? t.created_at : t.created_at.replace(' ','T')+'Z').toLocaleString('zh-CN')} · 点击查看详情</div>
+        <div class="tc-meta">${t.days}天 · ${fmtDateTime(t.created_at)} · 点击查看详情</div>
       </div>`).join('');
     list.querySelectorAll('.task-card').forEach(c => c.onclick = () => loadTaskDetail(c.dataset.tid));
-  } catch { list.innerHTML = '<div class="empty">加载失败</div>'; }
+  } catch (e) { list.innerHTML = `<div class="empty">${e.message?.startsWith('401') ? '请先登录 JAccount' : '加载失败'}</div>`; }
 }
 
 async function loadTaskDetail(id) {
@@ -42,7 +51,7 @@ async function loadTaskDetail(id) {
     openDrawer(t.title, `
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
         <span class="pill pill-${t.status}">${statusMap[t.status] || t.status}</span>
-        <span style="font-size:12px;color:var(--dimmer)">${t.days}天 · ${new Date(t.created_at.includes('T')?t.created_at:t.created_at.replace(' ','T')+'Z').toLocaleString('zh-CN')}</span>
+        <span style="font-size:12px;color:var(--dimmer)">${t.days}天 · ${fmtDateTime(t.created_at)}</span>
       </div>
       ${t.error ? `<div style="padding:8px 12px;background:var(--danger-soft);border-radius:6px;font-size:12px;color:var(--danger);margin-bottom:12px">${esc(t.error)}</div>` : ''}
       ${(t.steps || []).length ? `<h4 style="font-size:13px;color:var(--dim);margin-bottom:8px">执行步骤</h4><div class="timeline">${t.steps.map(s => `<div class="tl-item"><div class="tl-time">${s.type === 'tool_done' ? '工具' : '说明'}</div><div class="tl-text">${esc(s.name)}</div>${s.result ? `<div style="font-size:11px;color:var(--dimmer);margin-top:2px;max-height:60px;overflow:hidden">${esc(s.result.slice(0, 200))}</div>` : ''}</div>`).join('')}</div>` : ''}

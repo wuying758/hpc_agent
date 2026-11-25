@@ -1,11 +1,22 @@
 // 工单中心
 import { state } from './store.js';
-import { esc, fmt, statePill, openDrawer, api, relTime } from './utils.js';
+import { esc, fmt, statePill, openDrawer, api, relTime, fmtDateTime } from './utils.js';
 
 const STATUS_MAP = { pending: '待处理', in_progress: '处理中', resolved: '已解决', cancelled: '已取消' };
 const STATUS_NEXT = { pending: 'in_progress', in_progress: 'resolved' };
 
 export function initTickets() { loadTickets(); }
+
+// 切换账号后：重置筛选并重新加载当前用户工单
+export function refreshTickets() {
+  state.tStatus = '';
+  state.tSearch = '';
+  const sel = document.getElementById('tkStatusSel');
+  if (sel) sel.value = '';
+  const search = document.getElementById('tkSearch');
+  if (search) search.value = '';
+  loadTickets();
+}
 
 async function loadTickets() {
   const list = document.getElementById('ticketList');
@@ -23,7 +34,7 @@ async function loadTickets() {
         <span class="pill pill-${t.status}">${STATUS_MAP[t.status] || t.status}</span>
       </div>`).join('');
     list.querySelectorAll('.ticket-row').forEach(r => r.onclick = () => loadTicketDetail(r.dataset.tid));
-  } catch { list.innerHTML = '<div class="empty">加载失败</div>'; }
+  } catch (e) { list.innerHTML = `<div class="empty">${e.message?.startsWith('401') ? '请先登录 JAccount' : '加载失败'}</div>`; }
 }
 
 async function loadTicketDetail(id) {
@@ -43,7 +54,7 @@ async function loadTicketDetail(id) {
       </div>
       <h4 style="font-size:13px;color:var(--dim);margin:16px 0 8px">操作时间线</h4>
       <div class="timeline">
-        ${(t.events || []).map(ev => `<div class="tl-item"><div class="tl-time">${new Date(ev.created_at.includes('T')?ev.created_at:ev.created_at.replace(' ','T')+'Z').toLocaleString('zh-CN')} · ${esc(ev.actor)}</div><div class="tl-text">${esc(ev.event)}${ev.note ? '：' + esc(ev.note.slice(0,100)) : ''}</div></div>`).join('')}
+        ${(t.events || []).map(ev => `<div class="tl-item"><div class="tl-time">${fmtDateTime(ev.created_at)} · ${esc(ev.actor)}</div><div class="tl-text">${esc(ev.event)}${ev.note ? '：' + esc(ev.note.slice(0,100)) : ''}</div></div>`).join('')}
       </div>
       <div style="margin-top:20px;display:flex;gap:8px;flex-wrap:wrap">
         ${STATUS_NEXT[t.status] ? `<button class="btn btn-primary btn-sm" id="tkNext">推进为"${STATUS_MAP[STATUS_NEXT[t.status]]}"</button>` : ''}

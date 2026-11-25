@@ -1,12 +1,12 @@
 // 应用入口：路由、导航、初始化
 import { state, navigate } from './store.js';
 import { initChat, loadSession } from './chat.js';
-import { initJobs, bindJobsEvents } from './jobs.js';
-import { initTasks, stopTasks, bindTasksEvents } from './tasks.js';
-import { initTickets, bindTicketsEvents } from './tickets.js';
+import { initJobs, bindJobsEvents, refreshJobs } from './jobs.js';
+import { initTasks, stopTasks, bindTasksEvents, refreshTasks } from './tasks.js';
+import { initTickets, bindTicketsEvents, refreshTickets } from './tickets.js';
 import { refreshDataGroup } from './data.js';
 import * as auth from './auth.js';
-import { esc } from './utils.js';
+import { esc, closeDrawer } from './utils.js';
 import { initEvidence } from './evidence.js';
 import { initOverview, bindOverviewEvents } from './overview.js';
 import { initPanels, closeChatPanels, isNarrowLayout } from './panels.js';
@@ -179,6 +179,15 @@ function initAuth() {
     }
   };
   auth.onAuthChange(updateAuthUI);
+
+  // 账号变更（登录/登出/切换）：统一清空/重新加载任务、工单、作业及已打开的详情抽屉
+  // 聊天模块的清理由其自己的 onAccountChange 处理（chat.js）
+  auth.onAccountChange(() => {
+    closeDrawer();
+    refreshTasks();
+    refreshTickets();
+    refreshJobs();
+  });
 
   loginBtn.onclick = () => {
     loginError.hidden = true;
