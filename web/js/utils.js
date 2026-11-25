@@ -47,6 +47,10 @@ export async function api(path, opts = {}) {
     ...opts,
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
+  if (res.status === 401) {
+    // 会话失效：同步登录状态（会重新显示登录入口、禁用对话输入）
+    import('./auth.js').then(m => m.refreshAuth()).catch(() => {});
+  }
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();
 }

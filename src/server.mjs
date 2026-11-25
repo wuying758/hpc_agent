@@ -19,10 +19,10 @@ store.markInterruptedTasks();
 
 // ===== 会话 Cookie 辅助 =====
 const COOKIE_NAME = 'hpc_sid';
-// Cookie 有效期 12 小时（与 HPC token 一致）；非本地回环时加 Secure
+// Cookie 有效期 12 小时（与 HPC token 一致）；仅在真正走 HTTPS 时加 Secure，
+// 避免 HTTP+IP 访问时 Secure Cookie 被浏览器丢弃导致登录留不住
 function cookieOpts(req) {
-  const host = (req.headers.host || '').split(':')[0];
-  const secure = !(host === '127.0.0.1' || host === 'localhost') ? '; Secure' : '';
+  const secure = req.socket?.encrypted ? '; Secure' : '';
   return `HttpOnly; SameSite=Lax; Path=/; Max-Age=${12 * 3600}` + secure;
 }
 function parseCookies(req) {
@@ -40,7 +40,11 @@ function currentLogin(req) {
   if (!sid) return null;
   const s = store.getLoginSession(sid);
   if (!s) return null;
-  // token 已过期且无法刷新 → 视为未登录（对话时会自动重取）
+  // 会话有效期以 HPC token 的 token_exp 为准：过期即视为未登录（与浏览器 Cookie 的 12h 对齐）
+  if (!s.token_exp || s.token_exp <= Date.now()) {
+    store.deleteLoginSession(sid); // 清理过期会话
+    return null;
+  }
   return { sid, ...s };
 }
 
@@ -271,8 +275,9 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ===== 分析快照 =====
+    // ===== 分析快照（需登录）=====
     if (url.pathname === '/api/analysis') {
+      if (!currentLogin(req)) { send(401, { error: '未登录，请先登录 JAccount' }); return; }
       const days = +(url.searchParams.get('days') || 7);
       const { r, cached, generatedAt } = getAnalysis(days);
       send(200, {
@@ -328,8 +333,9 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // ===== 作业查询 =====
+    // ===== 作业查询（需登录）=====
     if (url.pathname === '/api/jobs' && req.method === 'GET') {
+      if (!currentLogin(req)) { send(401, { error: '未登录，请先登录 JAccount' }); return; }
       const days = Math.min(30, +(url.searchParams.get('days') || 7));
       const state = url.searchParams.get('state') || '';
       const user = url.searchParams.get('user') || '';
@@ -353,8 +359,9 @@ const server = http.createServer(async (req, res) => {
       send(200, { total, page, size, items, 口径: `近${days}天提交的作业` });
       return;
     }
-    // 作业详情 + 历史同名
+    // 作业详情 + 历史同名（需登录）
     if (url.pathname.startsWith('/api/jobs/') && req.method === 'GET') {
+      if (!currentLogin(req)) { send(401, { error: '未登录，请先登录 JAccount' }); return; }
       const jobId = +url.pathname.split('/').pop();
       const days = Math.min(30, +(url.searchParams.get('days') || 30));
       const jobs = loadJobs(days);
@@ -575,12 +582,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (url.pathname === '/api/fetch-data' && req.method === 'POST') {
-      // 触发数据更新（复用 fetch_jobs 逻辑，后台执行；使用当前登录用户的连接拉取共享集群数据）
-      const { fetchAndSave } = await import('./fetch_jobs.mjs');
+      // 触发数据更新（复用 fetch_jobs 逻辑，后台执行）
+      // 需登录：用当前用户的 HPC token 采集，不再允许未登录时用部署侧凭据拉取
       const login = currentLogin(req);
-      const conn = login ? { token: login.hpc_token, tokenExp: login.token_exp, operator: login.username, isServerUser: login.username === process.env.HPC_OPERATOR } : null;
+      if (!login) { send(401, { error: '未登录，请先登录后再更新数据' }); return; }
+      const { fetchAndSave } = await import('./fetch_jobs.mjs');
+      const conn = { token: login.hpc_token, tokenExp: login.token_exp, operator: login.username, isServerUser: login.username === process.env.HPC_OPERATOR };
       if (fetchAndSave) {
-        fetchAndSave({ conn }).then(r => console.log('fetch done:', r)).catch(e => console.error('fetch err:', e.message));
+        fetchAndSave({ conn }).then(r => console.log(`fetch ${login.username} done:`, r)).catch(e => console.error('fetch err:', e.message));
         send(200, { started: true });
       } else {
         send(501, { error: 'fetch 模块未导出 fetchAndSave，请用 CLI: npm run fetch' });
