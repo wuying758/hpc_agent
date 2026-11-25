@@ -1,0 +1,440 @@
+% !TeX program = xelatex
+% 编译：xelatex -interaction=nonstopmode -halt-on-error hpc_agent_introduction.tex（两遍）
+\documentclass[UTF8,fontset=none,a4paper]{ctexart}
+\usepackage[left=18mm,right=18mm,top=18mm,bottom=18mm,headheight=12pt,headsep=6mm,footskip=9mm]{geometry}
+\usepackage{fontspec}
+\setmainfont{Liberation Sans}
+\setsansfont{Liberation Sans}
+\setmonofont{DejaVu Sans Mono}[Scale=0.82]
+\setCJKmainfont{Noto Sans CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\usepackage[table]{xcolor}
+\definecolor{Navy}{HTML}{122C42}
+\definecolor{Ink}{HTML}{24394B}
+\definecolor{Muted}{HTML}{607280}
+\definecolor{Teal}{HTML}{007D80}
+\definecolor{TealLight}{HTML}{EAF5F3}
+\definecolor{Amber}{HTML}{A5661D}
+\definecolor{AmberLight}{HTML}{FFF4E5}
+\definecolor{Line}{HTML}{DCE4E9}
+\definecolor{Paper}{HTML}{F3F6F8}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,shapes.geometric,backgrounds}
+\usepackage[most]{tcolorbox}
+\usepackage{array,tabularx,booktabs,amsmath,enumitem}
+\usepackage{fancyhdr,lastpage}
+\usepackage{hyperref}
+\hypersetup{unicode=true,pdftitle={超算低效作业识别智能体简介},pdfauthor={项目技术文档},pdfsubject={建设背景、应用场景、设计框架、技术路线、资源需求、预期效果与风险合规},colorlinks=true,linkcolor=Teal,urlcolor=Teal,bookmarksopen=true}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\fontsize{8}{10}\selectfont\color{Muted}HPC AGENT\quad /\quad 项目技术简介}
+\fancyhead[R]{\fontsize{8}{10}\selectfont\color{Muted}数据驱动\quad ·\quad 证据可复核\quad ·\quad 人工决策}
+\fancyfoot[L]{\fontsize{7.5}{10}\selectfont\color{Muted}超算低效作业识别智能体}
+\fancyfoot[R]{\fontsize{8}{10}\selectfont\color{Muted}\thepage\ /\ \pageref{LastPage}}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{1.7mm}
+\setlength{\tabcolsep}{3mm}
+\renewcommand{\arraystretch}{1.32}
+\setlist[itemize]{leftmargin=1.25em,itemsep=1mm,topsep=1mm,parsep=0pt,label={\color{Teal}\textbullet}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\bodyfont}{\fontsize{9.5}{15.2}\selectfont}
+\newcommand{\smallfont}{\fontsize{8.3}{12.6}\selectfont}
+\newcommand{\captionline}[1]{\par\vspace{1mm}{\fontsize{8}{12}\selectfont\color{Muted}#1}\par}
+\newcommand{\kicker}[1]{{\fontsize{8.4}{11}\selectfont\bfseries\color{Teal}#1}}
+\newcommand{\pagehead}[3]{%
+  \pdfbookmark[0]{#2}{sec#1}%
+  \kicker{#1\quad /\quad HPC AGENT}\par\vspace{1.2mm}%
+  {\fontsize{23}{30}\selectfont\bfseries\color{Navy}#2}\par\vspace{1mm}%
+  {\fontsize{10}{16}\selectfont\color{Muted}#3}\par\vspace{4mm}}
+\newcommand{\subhead}[1]{{\fontsize{11.2}{17}\selectfont\bfseries\color{Navy}#1}\par\vspace{0.8mm}}
+\newcommand{\pill}[2]{\tikz[baseline=(p.base)]\node[fill=#1,rounded corners=1.4mm,inner xsep=2.5mm,inner ysep=1.2mm,font=\fontsize{8}{10}\selectfont,text=white] (p) {#2};}
+\newtcolorbox{panel}[1][]{enhanced,colback=white,colframe=Line,boxrule=0.45pt,arc=2.3mm,left=4mm,right=4mm,top=3.4mm,bottom=3.4mm,before skip=0pt,after skip=0pt,#1}
+\newtcolorbox{softbox}[1][]{enhanced,colback=Paper,colframe=Paper,boxrule=0pt,arc=2.3mm,left=4mm,right=4mm,top=3mm,bottom=3mm,before skip=0pt,after skip=0pt,#1}
+\tikzset{
+  flow/.style={-{Latex[length=2mm,width=1.4mm]},line width=0.7pt,draw=Teal},
+  grayflow/.style={-{Latex[length=2mm,width=1.4mm]},line width=0.65pt,draw=Muted},
+  block/.style={rounded corners=2mm,draw=Line,fill=white,line width=0.5pt,align=center,font=\fontsize{9}{13}\selectfont,text=Ink,inner sep=2mm},
+  smallblock/.style={block,font=\fontsize{8.3}{11.6}\selectfont},
+  nodetitle/.style={font=\fontsize{9.5}{13}\selectfont\bfseries,text=Navy}
+}
+\begin{document}
+\color{Ink}\bodyfont
+
+% ============================== COVER ==============================
+\thispagestyle{empty}
+\pdfbookmark[0]{项目概览}{cover}
+\kicker{PROJECT BRIEF\quad /\quad 智能体建设与应用}
+\vspace{6mm}
+
+{\fontsize{29}{39}\selectfont\bfseries\color{Navy}超算低效作业\\[1mm]识别智能体}\par
+\vspace{3mm}
+{\fontsize{13}{20}\selectfont\color{Teal}从集群作业记录，到可复核的运维建议}\par
+\vspace{2mm}
+{\fontsize{10}{17}\selectfont 面向高校与科研机构的 HPC / SLURM 作业分析工作台，结合确定性规则、\newline 自然语言交互与证据留痕，辅助识别异常、排查低效、形成处置建议。}\par
+\vspace{5mm}
+
+\begin{tcolorbox}[enhanced,colback=Navy,colframe=Navy,arc=3mm,boxrule=0pt,left=4mm,right=4mm,top=4mm,bottom=4mm]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+\useasboundingbox (0,0) rectangle (164,65);
+\foreach \x in {8,22,36}{
+  \draw[rounded corners=1.5mm,draw=white!45,fill=white!7,line width=0.6pt] (\x,32) rectangle ++(11,24);
+  \foreach \y in {37,43,49}{
+    \draw[white!45,line width=0.5pt] (\x+2,\y) -- (\x+8,\y);
+    \fill[Teal!55!white] (\x+8,\y+2) circle (0.65);
+  }
+}
+\node[font=\fontsize{9}{12}\selectfont,text=white] at (27,25) {集群作业记录};
+\node[font=\fontsize{7.5}{10}\selectfont,text=white!65] at (27,19) {状态 / 时间 / 资源申请};
+\draw[-{Latex[length=2.4mm]},white!65,line width=0.85pt] (52,44) -- (67,44);
+\draw[rounded corners=2mm,draw=Teal!55!white,fill=Teal!40!Navy,line width=0.7pt] (71,33) rectangle (104,55);
+\foreach \p in {(78,39),(87,49),(97,39)} {\fill[white] \p circle (1.3);}
+\draw[white!70,line width=0.65pt] (78,39)--(87,49)--(97,39)--cycle;
+\node[font=\fontsize{9}{12}\selectfont,text=white] at (87.5,25) {规则 + 智能体};
+\node[font=\fontsize{7.5}{10}\selectfont,text=white!65] at (87.5,19) {查数 / 计算 / 解释};
+\draw[-{Latex[length=2.4mm]},white!65,line width=0.85pt] (109,44) -- (124,44);
+\draw[rounded corners=1.3mm,draw=white!65,fill=white!8,line width=0.65pt] (132,32) rectangle (153,56);
+\draw[white!55] (136,49)--(149,49) (136,45)--(146,45);
+\draw[Teal!55!white,line width=1.5pt,line cap=round] (137,38)--(141,35)--(148,42);
+\node[font=\fontsize{9}{12}\selectfont,text=white] at (142,25) {证据与工单};
+\node[font=\fontsize{7.5}{10}\selectfont,text=white!65] at (142,19) {人工复核 / 运维处置};
+\draw[white!15] (5,10)--(159,10);
+\node[anchor=west,font=\fontsize{8}{11}\selectfont,text=white!78] at (5,3) {让模型解释证据，让计算保持确定，让高风险操作留给人。};
+\end{tikzpicture}
+\end{tcolorbox}
+\vspace{4mm}
+
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=33mm]
+\kicker{定位}\par
+\textbf{科研算力的分析助手}\par
+\smallfont 以作业为分析对象，以证据为输出基础，连接科研用户、运维人员与资源管理者。
+\end{panel}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=33mm]
+\kicker{建设原则}\par
+\textbf{集群数据共享，个人工作隔离}\par
+\smallfont 同一集群共用作业与分析缓存；账号凭据、模型配置及个人记录按用户管理。
+\end{panel}
+\end{minipage}
+\vspace{5mm}
+
+\subhead{阅读导览}
+\begin{tabularx}{\linewidth}{@{}Y Y@{}}
+\textcolor{Teal}{01} 建设背景\quad\textcolor{Muted}{为什么需要它} & \textcolor{Teal}{02} 应用场景\quad\textcolor{Muted}{解决哪些问题}\\
+\textcolor{Teal}{03} 设计框架\quad\textcolor{Muted}{模块如何协作} & \textcolor{Teal}{04} 技术路线\quad\textcolor{Muted}{数据如何变成证据}\\
+\textcolor{Teal}{05} 资源需求\quad\textcolor{Muted}{部署与运行投入} & \textcolor{Teal}{06} 预期效果\quad\textcolor{Muted}{如何评价价值}\\
+\textcolor{Teal}{07} 风险与伦理合规 & \\
+\end{tabularx}
+\vfill
+{\smallfont\color{Muted}文档范围：结合当前原型说明建设思路，并标明后续建设内容。\newline 资源数值为预算建议；效果通过后续试点评测验收。\hfill 2026 年 11 月}
+
+% ============================== BACKGROUND / SCENARIOS ==============================
+\clearpage
+\pagehead{01—02}{建设背景与应用场景}{把分散的作业记录，转化为可理解、可追踪、可行动的问题线索。}
+
+\subhead{01\quad 建设背景}
+HPC 集群承载批量仿真、科学计算与数据分析等任务。作业记录包含状态、排队与运行时间、核数、内存申请及记账信息，但问题排查往往依赖人工筛选和经验判断。随着作业规模增长，\textbf{“能看到数据”与“能解释问题”之间的距离}逐渐扩大。
+\vspace{2mm}
+\begin{softbox}
+\begin{tabularx}{\linewidth}{@{}Y Y Y@{}}
+\textbf{数据分散} & \textbf{诊断门槛高} & \textbf{处置链路易断}\\[-1mm]
+\smallfont 多状态、多时间窗口，单条记录难说明重复性问题。 & \smallfont 指标单位、记账覆盖率与业务语义需要联合解读。 & \smallfont 发现异常后，还要整理证据、沟通并跟踪处理。\\
+\end{tabularx}
+\end{softbox}
+\vspace{4mm}
+\subhead{02\quad 典型应用场景}
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=43mm]
+\pill{Teal}{场景 A}\quad\textbf{集群概况巡检}\par
+\smallfont\textcolor{Muted}{问题示例}\quad“近 7 天有哪些值得优先排查的作业？”\par
+结合状态分布、排队、超时和失败线索，形成重点清单，并展示数据窗口与更新时间。
+\end{panel}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=43mm]
+\pill{Teal}{场景 B}\quad\textbf{单作业诊断}\par
+\smallfont\textcolor{Muted}{问题示例}\quad“这个作业为什么超时，申请是否合适？”\par
+查看作业详情、时间线、资源申请和同名历史，区分已知事实、可能原因与核查建议。
+\end{panel}
+\end{minipage}
+\vspace{3mm}
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=43mm]
+\pill{Teal}{场景 C}\quad\textbf{重复问题排查}\par
+\smallfont\textcolor{Muted}{问题示例}\quad“哪些同名作业在反复失败？”\par
+在选定窗口中聚合同用户、同作业名记录，识别重复失败或申请规格偏高的线索。
+\end{panel}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=43mm]
+\pill{Teal}{场景 D}\quad\textbf{分析留痕与协同}\par
+\smallfont\textcolor{Muted}{问题示例}\quad“把这次诊断整理成可跟进的任务。”\par
+保存分析步骤、证据与结论，形成工单和处理记录，支持科研用户与运维人员协同。
+\end{panel}
+\end{minipage}
+\vspace{4mm}
+\subhead{服务对象与交付物}
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{25mm}Y@{}}
+科研用户 & 理解本人关注的作业与历史模式，获得可复核的参数调整建议。\\
+运维人员 & 快速定位重点作业、追踪重复问题，整理处置证据与工单。\\
+资源管理者 & 观察集群作业结构与排队压力，为资源配置讨论提供事实依据。\\
+\end{tabularx}
+\vfill
+\begin{softbox}[colback=TealLight]
+\smallfont\textbf{本项目的访问设定：}所有已登录用户均可查看集群全部作业；集群数据共用一份。个人登录凭据、模型配置和工作记录保持隔离，具体访问政策由集群管理方确认。
+\end{softbox}
+
+% ============================== ARCHITECTURE ==============================
+\clearpage
+\pagehead{03}{设计框架}{以确定性分析为事实底座，以工具调用连接自然语言与集群数据。}
+
+\begin{panel}[left=2mm,right=2mm,top=3mm,bottom=3mm]
+\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+\useasboundingbox (0,0) rectangle (164,122);
+\node[block,fill=Navy,draw=Navy,text=white,minimum width=160mm,minimum height=17mm] (web) at (82,111) {\textbf{交互工作台}\quad 聊天 / 集群总览 / 作业中心 / 分析任务 / 工单 / 设置};
+\node[block,fill=TealLight,draw=Teal!25,minimum width=160mm,minimum height=17mm] (api) at (82,84) {\textbf{应用与会话层}\quad Node.js HTTP API / 登录会话 / 记录归属 / NDJSON 流式响应};
+\draw[flow] (web.south)--(api.north);
+\node[smallblock,minimum width=49mm,minimum height=25mm] (rules) at (26,51) {\textbf{确定性分析引擎}\\规则筛选 / 聚合与排序\\单位校正 / 缺失记账降级};
+\node[smallblock,minimum width=49mm,minimum height=25mm] (agent) at (82,51) {\textbf{智能体编排}\\意图理解 / 工具调用循环\\结果解释 / 建议与摘要};
+\node[smallblock,minimum width=49mm,minimum height=25mm] (records) at (138,51) {\textbf{工作记录与证据}\\SQLite 持久化\\会话 / 任务 / 证据 / 工单};
+\draw[flow] ($(api.south)+(-56,0)$)--(rules.north);
+\draw[flow] (api.south)--(agent.north);
+\draw[flow] ($(api.south)+(56,0)$)--(records.north);
+\draw[grayflow,<->] (rules.east)--(agent.west);
+\draw[grayflow] (agent.east)--(records.west);
+\node[smallblock,fill=Paper,minimum width=49mm,minimum height=23mm] (data) at (26,12) {\textbf{集群共享数据}\\HPC / SLURM API → JSONL\\按时间窗口生成分析缓存};
+\node[smallblock,fill=TealLight,draw=Teal!30,minimum width=49mm,minimum height=23mm] (model) at (82,12) {\textbf{模型服务}\\OpenAI 兼容接口\\校内或经批准的服务端点};
+\node[smallblock,fill=Paper,minimum width=49mm,minimum height=23mm] (identity) at (138,12) {\textbf{个人身份与配置}\\服务端 HPC 登录会话\\个人模型配置为后续建设项};
+\draw[grayflow,<->] (rules.south)--(data.north);
+\draw[grayflow,<->] (agent.south)--(model.north);
+\draw[grayflow,<->] (records.south)--(identity.north);
+\end{tikzpicture}
+\end{panel}
+\captionline{图 1\quad 总体设计。实线描述模块协作关系；个人模型配置、共享同步调度和完整上线治理仍需持续完善。}
+\vspace{4mm}
+
+\begin{minipage}[t]{0.485\linewidth}
+\begin{softbox}[height=43mm]
+\subhead{共享的数据面}
+\smallfont 同一集群的作业记录、分析结果和数据覆盖信息统一维护。目标是同一集群同一时刻只运行一个同步任务，供所有用户复用。
+\end{softbox}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\linewidth}
+\begin{softbox}[height=43mm]
+\subhead{隔离的个人工作面}
+\smallfont HPC 凭据、模型 API 配置与个人会话、任务、证据和工单按用户管理。每次请求绑定自己的身份，避免并发请求串用凭据。
+\end{softbox}
+\end{minipage}
+\vspace{4mm}
+\subhead{当前原型与建设重点}
+\smallfont
+\textbf{已有基础：}Web 与 CLI、五类分析规则及补充信号、工具调用与流式回答、共享作业缓存、任务/证据/工单基础模块、服务端登录及记录归属。
+
+\textbf{后续重点：}登录过期与账号切换处理、工单入口统一落库、共享同步去重与进度、个人模型连接配置，以及审计、容量和上线治理。
+\vfill
+\begin{softbox}[colback=AmberLight]
+\smallfont\textbf{控制边界：}模型能够查询、解释和提出建议；暂停、终止、调配额等高风险动作仅形成待复核工单，由具备权限的运维人员确认执行。
+\end{softbox}
+
+% ============================== TECHNICAL ROUTE ==============================
+\clearpage
+\pagehead{04}{技术路线}{数据采集 → 确定性计算 → 工具检索 → 自然语言解释 → 人工复核。}
+
+\begin{tikzpicture}[x=1mm,y=1mm]
+\useasboundingbox (0,0) rectangle (174,33);
+\foreach \x/\n/\t/\s in {16/1/采集/分窗与增量,51.5/2/整理/去重与口径,87/3/计算/规则与核时,122.5/4/交互/工具与流式,158/5/留痕/证据与工单}{
+  \node[smallblock,minimum width=31mm,minimum height=25mm,fill=Paper,draw=Paper] at (\x,15) {\textcolor{Teal}{\textbf{0\n}}\quad\textbf{\t}\\\s};
+}
+\foreach \x in {32,67.5,103,138.5} {\draw[flow] (\x,15)--++(3.5,0);}
+\end{tikzpicture}
+\captionline{图 2\quad 端到端处理流程。采集与分析复用集群数据，模型通过受控工具读取结果。}
+\vspace{3mm}
+\subhead{数据与计算：先确定事实，再生成解释}
+\smallfont
+采集 SLURM 作业的状态、提交/开始/结束时间、运行时长、核数、内存与 CPU 秒；按日存储紧凑 JSONL。对同一作业的多次观测保留较新记录，识别无效时间值，并统一分钟、秒、GiB 与核时口径。界面提供 7 / 14 / 30 天窗口，当前主要按\textbf{“近 N 天提交的作业”}统计。
+\vspace{2mm}
+\begin{panel}[top=2.8mm,bottom=2.8mm]
+\begin{minipage}[t]{0.49\linewidth}
+\textbf{CPU 利用率估算}\par\vspace{-1mm}
+\[
+  U_{\mathrm{CPU}}=\frac{\text{CPU 秒}}{\text{运行秒}\times\text{申请核数}}
+\]
+\end{minipage}\hfill
+\begin{minipage}[t]{0.47\linewidth}
+\textbf{资源时间口径}\par
+\smallfont 占用核时 = 运行秒 $\times$ 申请核数 / 3600。\par
+排队核时用于描述需求与等待压力；与已消耗的计算核时分别呈现。
+\end{minipage}
+\end{panel}
+\vspace{3mm}
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{24mm}Y Y@{}}
+\toprule
+分析线索 & 当前规则示例 & 解读要求\\
+\midrule
+CPU 利用率低 & 运行至少 30 分钟，利用率低于 15\%，或明显低于自身历史基线。 & 仅对 CPU 秒可用记录计算，先检查记账覆盖率。\\
+时限申请偏高 & 申请时限至少 8 小时，且超过实际运行时间的 5 倍。 & 作为时限优化线索，结合重跑与波动需求复核。\\
+排队时间偏长 & 排队时间超过分区 P90 与 2 小时中的较大值。 & 排队受调度策略与资源约束影响。\\
+重复失败 & 同窗口内，同用户、同作业名出现至少 3 次 FAILED。 & 聚合历史模式，再核查脚本、环境与输入。\\
+内存规格偏高 & 申请内存超过 8 GiB/核，且 CPU 利用率低于 30\%。 & 属于间接线索，需峰值内存等指标进一步确认。\\
+\bottomrule
+\end{tabularx}
+\vspace{3mm}
+\subhead{智能体编排与工程实现}
+\smallfont
+\textbf{工具集合：}\texttt{cluster\_overview}、\texttt{top\_wasters}、\texttt{job\_detail}、\texttt{user\_report}、\texttt{create\_ticket}。模型采用工具调用循环组织查询，当前最多 8 轮；工具数值由分析引擎提供。浏览器通过 NDJSON 接收正文、工具进度与建议。
+
+\textbf{技术栈：}Node.js 24+、原生 JavaScript / HTML / CSS、内置 SQLite、JSONL 与文件缓存、OpenAI 兼容模型 API；HPC 请求通过异步上下文绑定当前用户身份。
+\vfill
+{\smallfont\color{Muted}CPU 秒为零可能来自记账缺失。覆盖不足时，优先呈现超时、重复失败、排队与长尾等线索；估算值同时保留数据窗口和快照时间。}
+
+% ============================== RESOURCES ==============================
+\clearpage
+\pagehead{05}{资源需求}{优先采用轻量业务服务与外部模型 API，按数据规模和并发逐步扩展。}
+
+\begin{softbox}[colback=TealLight]
+\textbf{部署起点}\quad 业务服务建议从 2–4 vCPU、4–8 GB 内存、SSD 存储起步。模型通过 API 调用时，业务服务器无需单独配置推理 GPU。
+\end{softbox}
+\vspace{4mm}
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{22mm}p{49mm}Y@{}}
+\toprule
+资源类别 & 建议投入 & 用途与约束\\
+\midrule
+应用运行 & Linux；Node.js 24+；2–4 vCPU；4–8 GB 内存。 & 承载 Web、会话、分析和采集。当前文件扫描与 SQLite 写入需关注大数据量及并发时的阻塞。\\
+数据存储 & SSD 可用空间初始预留 20–50 GB，另配备份空间。 & 保存 JSONL、SQLite、分析缓存与审计日志；依据实际记录大小和保留周期扩容。\\
+模型服务 & 获授权的 OpenAI 兼容端点、用户 API Key、调用额度。 & 成本主要由输入输出 token、工具轮次与并发决定；需要超时、限流与费用可见性。\\
+网络与账号 & 可达 HPC API 和模型服务的网络；HTTPS 入口；有效用户账号。 & HPC 采集遵循接口限额和访问政策；会话与密钥通过受保护链路传输。\\
+开发与运营 & 全栈开发、HPC 领域支持，以及安全与运维支持。 & 维护规则口径、核验案例、处理授权/过期问题、监测同步与服务可用性。\\
+\bottomrule
+\end{tabularx}
+\vspace{4mm}
+\subhead{容量与成本如何估算}
+\begin{panel}
+\begin{minipage}[t]{0.485\linewidth}
+\textbf{数据容量}\par
+\smallfont 数据空间 $\approx$ 作业记录数 $\times$ 单条记录大小，加缓存、索引和备份。\par
+若紧凑记录约 1 KB/条，100 万条约为 1 GB（十进制）；实际以采样测量为准。
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\linewidth}
+\textbf{模型费用}\par
+\smallfont 调用费用 $\approx$ 输入 token 费用 + 输出 token 费用，累加各轮工具调用、建议与标题生成。\par
+按用户与请求记录用量，设置额度与并发上限。
+\end{minipage}
+\end{panel}
+\vspace{4mm}
+\subhead{按阶段投入，而不是一次性堆算力}
+\begin{tikzpicture}[x=1mm,y=1mm]
+\useasboundingbox (0,0) rectangle (174,33);
+\node[smallblock,minimum width=52mm,minimum height=29mm,fill=Paper,draw=Paper] at (26,16) {\textbf{原型验证}\\连接可用、指标可解释\\先跑通问题到证据的链路};
+\node[smallblock,minimum width=52mm,minimum height=29mm,fill=TealLight,draw=TealLight] at (87,16) {\textbf{小范围试点}\\补齐身份、同步与密钥治理\\采集真实负载与使用反馈};
+\node[smallblock,minimum width=52mm,minimum height=29mm,fill=Paper,draw=Paper] at (148,16) {\textbf{规模化运行}\\按压测结果扩容\\引入任务队列与增量索引};
+\draw[flow] (53,16)--(60,16);
+\draw[flow] (114,16)--(121,16);
+\end{tikzpicture}
+\captionline{图 3\quad 建议的资源投入路径。配置用于预算起步，不预设未经验证的并发承载量。}
+\vfill
+{\smallfont\color{Muted}如改为自建模型推理服务，需另按模型规模、量化方式、上下文长度与目标并发核算 GPU、显存和运维成本。}
+
+% ============================== EXPECTED EFFECTS ==============================
+\clearpage
+\pagehead{06}{预期效果与评价方法}{用可追溯的分析过程提升排查效率，用试点数据验证实际收益。}
+
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=34mm]
+\kicker{效率}\par\textbf{从手工筛选到问题导向}\par
+\smallfont 自然语言定位重点作业，减少反复切换页面与整理查询条件的时间。
+\end{panel}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=34mm]
+\kicker{可信}\par\textbf{从结论到证据链}\par
+\smallfont 回答附带作业、窗口、工具结果与计算口径，便于复查和纠错。
+\end{panel}
+\end{minipage}
+\vspace{3mm}
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=34mm]
+\kicker{协同}\par\textbf{从一次问答到持续跟进}\par
+\smallfont 以任务、证据、工单连接分析与处置，降低问题交接中的信息损失。
+\end{panel}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.485\linewidth}
+\begin{panel}[height=34mm]
+\kicker{治理}\par\textbf{从经验判断到统一口径}\par
+\smallfont 将重复失败、排队压力与资源申请线索沉淀为可讨论、可迭代的规则。
+\end{panel}
+\end{minipage}
+\vspace{4mm}
+
+\subhead{建议验收指标}
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{24mm}Y Y@{}}
+\toprule
+评价维度 & 指标定义 & 验证方式\\
+\midrule
+排查效率 & 完成同类诊断任务的中位用时、人工查询次数。 & 同一批案例，对比人工流程与智能体辅助流程。\\
+事实正确性 & 数值与工具结果一致率、关键事实引用完整率。 & 对照原始作业记录和确定性计算结果逐项复核。\\
+线索有效性 & 专家确认的有效线索比例、已知问题召回情况。 & 构建已标注案例集，区分误报、漏报和证据不足。\\
+服务质量 & 首次可见响应时间、完整回答耗时、同步成功率。 & 在约定网络与数据规模下记录调用链和失败原因。\\
+处置价值 & 工单可执行性、跟进完成率、建议采纳情况。 & 由运维复核建议，跟踪实施后的业务变化。\\
+\bottomrule
+\end{tabularx}
+\vspace{4mm}
+\subhead{建立可持续改进的闭环}
+\begin{tikzpicture}[x=1mm,y=1mm]
+\useasboundingbox (0,0) rectangle (174,35);
+\foreach \x/\t/\s in {19/案例集/覆盖典型与异常样本,64/对照评测/对比人工与工具事实,109/专家复核/判定有效性与风险,154/规则迭代/回写阈值与产品反馈}{
+  \node[smallblock,minimum width=38mm,minimum height=24mm,fill=Paper,draw=Paper] at (\x,18) {\textbf{\t}\\\s};
+}
+\foreach \x in {39,84,129}{\draw[flow] (\x,18)--++(5,0);}
+\end{tikzpicture}
+\captionline{图 4\quad 效果验证闭环：以同一案例、同一口径对照评估，再将反馈用于规则与交互优化。}
+\vfill
+\begin{softbox}[colback=AmberLight]
+\smallfont\textbf{收益解释原则：}CPU 空闲估算、失败核时与排队核时分别解释。资源申请偏高、失败或等待都需结合科研任务需求判断；资源节约率、成本和能耗收益应在实际调整后测量。
+\end{softbox}
+
+% ============================== RISKS & ETHICS ==============================
+\clearpage
+\pagehead{07}{风险、伦理与合规}{保护凭据与科研数据，约束模型行为，保留明确的人类责任链。}
+
+\smallfont
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{23mm}p{42mm}Y@{}}
+\toprule
+风险领域 & 可能影响 & 建设要求与控制措施\\
+\midrule
+事实与因果 & 模型误读统计口径，把相关性解释为故障原因。 & 数值由工具计算；区分事实、假设与建议；展示窗口、快照时间和证据；疑点交由专家复核。\\
+数据质量 & CPU 秒缺失、记录过期或单位错误导致误报。 & 统一单位、检查记账覆盖与时间有效性；缺失时降级分析；同步失败保留可识别的旧快照。\\
+账号与密钥 & 会话串用、过期校验遗漏、密钥泄露或账号切换残留。 & 请求级身份绑定、服务端到期校验、记录归属检查、前端清理、HTTPS、密钥加密与轮换、最小化日志。\\
+科研数据流向 & 作业名、用户名、路径或诊断信息被发送至外部模型。 & 明示模型服务与数据去向；仅发送必要字段；脱敏敏感标识；使用经批准的端点并约定保留与处理条款。\\
+提示注入与接口 & 作业名或工具输出夹带指令；任意模型地址引发服务端越权访问。 & 将查询结果视作数据；工具白名单与参数校验；限制上游目标、重定向与请求额度；输出安全渲染。\\
+公平与科研自主 & 将“低效线索”直接用于人员排名、处罚或限制科研探索。 & 评价作业而非给个人贴标签；说明阈值与适用条件；提供复核和反馈渠道，结合学科与任务特征判断。\\
+高风险处置 & 模型建议被直接转化为暂停、终止或配额变更。 & 工单与执行分离；人工核验实时状态及影响，审批后由授权运维执行并留痕。\\
+\bottomrule
+\end{tabularx}
+\vspace{4mm}
+\subhead{人类监督与责任分工}
+\begin{tikzpicture}[x=1mm,y=1mm]
+\useasboundingbox (0,0) rectangle (174,29);
+\node[smallblock,minimum width=51mm,minimum height=23mm,fill=Paper,draw=Paper] at (26,14) {\textbf{智能体}\quad 提出线索\\汇总事实、生成建议与工单};
+\node[smallblock,minimum width=51mm,minimum height=23mm,fill=TealLight,draw=TealLight] at (87,14) {\textbf{领域人员}\quad 复核依据\\确认原因、必要性与影响};
+\node[smallblock,minimum width=51mm,minimum height=23mm,fill=AmberLight,draw=AmberLight] at (148,14) {\textbf{授权运维}\quad 审批执行\\核验实时状态、执行并留痕};
+\draw[flow] (52,14)--(61,14);
+\draw[flow] (113,14)--(122,14);
+\end{tikzpicture}
+\captionline{图 5\quad 决策责任链。智能体辅助分析，高风险执行权保留在人类授权流程中。}
+\vspace{4mm}
+\subhead{合规落点与上线准备}
+\begin{itemize}
+\item 对照《个人信息保护法》《数据安全法》《网络安全法》及所在机构、HPC 集群的数据与账号使用制度，明确处理目的、共享范围、保留期限和删除流程。
+\item “全体登录用户可见全量作业”属于本项目的访问政策，应由集群管理方确认；对不宜公开的作业字段进行最小化展示与脱敏。
+\item 上线前完善会话有效性、共享接口鉴权、个人模型配置保护与工单一致性；补充审计、备份恢复和异常处置责任人。
+\item 根据实际服务对象与开放范围，确认生成式人工智能相关管理要求及模型服务协议的适用性。
+\end{itemize}
+\vfill
+{\fontsize{7.6}{11.4}\selectfont\color{Muted}\textbf{实现依据：}项目 README 与 \texttt{src/analyze.mjs}、\texttt{src/agent.mjs}、\texttt{src/hpc\_client.mjs}、\texttt{src/fetch\_jobs.mjs}、\texttt{src/server.mjs}、\texttt{src/store.mjs} 及 Web 模块。本文中的结构与流程图为原创矢量示意图。}
+
+\end{document}

@@ -65,9 +65,8 @@ export function initChat() {
 
 function resetChatForAccount() {
   changeConversation(); // 停流 + 清空 pendingQueue
-  sid = null;
+  sid = null;          // 只清内存态，不动 localStorage 里保存的 sid（否则刷新后无法恢复）
   state.sessionId = null;
-  saveSid(null, auth.getAuth().username);
   $msgs().innerHTML = '<div class="chat-content"></div>';
   $q().value = '';
   autoGrow();
