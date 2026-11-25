@@ -4,7 +4,9 @@ import { initChat, loadSession } from './chat.js';
 import { initJobs, bindJobsEvents } from './jobs.js';
 import { initTasks, stopTasks, bindTasksEvents } from './tasks.js';
 import { initTickets, bindTicketsEvents } from './tickets.js';
-import { initData } from './data.js';
+import { refreshDataGroup } from './data.js';
+import * as auth from './auth.js';
+import { esc } from './utils.js';
 import { initEvidence } from './evidence.js';
 import { initOverview, bindOverviewEvents } from './overview.js';
 import { initPanels, closeChatPanels, isNarrowLayout } from './panels.js';
@@ -14,7 +16,6 @@ const PAGES = {
   jobs: { el: 'page-jobs', init: initJobs },
   tasks: { el: 'page-tasks', init: initTasks },
   tickets: { el: 'page-tickets', init: initTickets },
-  data: { el: 'page-data', init: initData },
 };
 const inited = new Set();
 
@@ -26,6 +27,8 @@ function closeNav() {
 
 function route() {
   const hash = window.location.hash.replace('#/', '') || 'chat';
+  // 旧链接 #/data → 打开设置的「数据与连接」分组
+  if (hash === 'data') { openSettings('data'); return; }
   const page = PAGES[hash] ? hash : 'chat';
   for (const [key, p] of Object.entries(PAGES)) {
     document.getElementById(p.el).hidden = key !== page;
@@ -74,18 +77,37 @@ export function initApp() {
   const settingsBtn = document.getElementById('settingsBtn');
   const settingsPanel = document.getElementById('settingsPanel');
   const settingsBackdrop = document.getElementById('settingsBackdrop');
-  const themeBtn = document.getElementById('themeBtn');
   let settingsTimer;
-  const applyThemeLabel = () => {
-    themeBtn.textContent = document.documentElement.dataset.theme === 'dark' ? '切换到浅色' : '切换到深色';
+
+  // ---- 主题切换 ----
+  const applyTheme = (t) => {
+    document.documentElement.dataset.theme = t;
+    try { localStorage.setItem('theme', t); } catch {}
+    document.querySelectorAll('.theme-option').forEach(b => {
+      b.classList.toggle('active', b.dataset.theme === t);
+    });
   };
-  applyThemeLabel();
-  themeBtn.onclick = () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = next;
-    try { localStorage.setItem('theme', next); } catch {}
-    applyThemeLabel();
-  };
+  applyTheme(document.documentElement.dataset.theme || 'light');
+  document.querySelectorAll('.theme-option').forEach(b => {
+    b.onclick = () => applyTheme(b.dataset.theme);
+  });
+
+  // ---- 设置分组切换 ----
+  const navItems = document.querySelectorAll('#settingsNav .settings-nav-item');
+  const groups = document.querySelectorAll('.settings-group');
+  function showGroup(group) {
+    navItems.forEach(n => {
+      const on = n.dataset.group === group;
+      n.classList.toggle('active', on);
+      n.setAttribute('aria-selected', String(on));
+    });
+    groups.forEach(g => { g.hidden = g.dataset.group !== group; });
+    if (group === 'data') refreshDataGroup();
+  }
+  navItems.forEach(n => { n.onclick = () => showGroup(n.dataset.group); });
+
+  window.__showSettingsGroup = showGroup;
+
   const closeSettings = () => {
     settingsPanel.classList.remove('open');
     settingsBackdrop.classList.remove('open');
@@ -97,17 +119,19 @@ export function initApp() {
     }, 200);
     settingsBtn.focus();
   };
-  settingsBtn.onclick = () => {
+  window.openSettings = (group = 'appearance') => {
     closeNav();
     clearTimeout(settingsTimer);
     settingsPanel.hidden = false;
     settingsBackdrop.hidden = false;
-    settingsPanel.offsetHeight;
+    settingsPanel.offsetHeight; // 强制 reflow
+    showGroup(group);
     settingsPanel.classList.add('open');
     settingsBackdrop.classList.add('open');
     settingsBtn.setAttribute('aria-expanded', 'true');
     document.getElementById('settingsClose').focus();
   };
+  settingsBtn.onclick = () => window.openSettings('appearance');
   document.getElementById('settingsClose').onclick = closeSettings;
   settingsBackdrop.onclick = closeSettings;
   document.addEventListener('keydown', e => {
@@ -121,6 +145,72 @@ export function initApp() {
   bindTicketsEvents();
   bindOverviewEvents();
   initEvidence();
+
+  // 登录逻辑
+  initAuth();
+}
+
+function initAuth() {
+  const loginBtn = document.getElementById('loginBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
+  const loginModal = document.getElementById('loginModal');
+  const loginForm = document.getElementById('loginForm');
+  const loginUser = document.getElementById('loginUser');
+  const loginPass = document.getElementById('loginPass');
+  const loginError = document.getElementById('loginError');
+
+  // 单一状态来源：auth 模块；登录入口 / 设置账号 / 聊天提示共用
+  const updateAuthUI = (s) => {
+    const on = s.logged_in;
+    loginBtn.hidden = on;
+    logoutBtn.hidden = !on;
+    if (on) document.getElementById('logoutBtnText').textContent = s.username;
+    const q = document.getElementById('q');
+    const sendBtn = document.getElementById('sendBtn');
+    if (on) { q.disabled = false; q.placeholder = '描述你想排查的问题，或输入作业 ID…'; }
+    else { q.disabled = true; q.placeholder = '请先登录 JAccount 后开始对话'; }
+    if (sendBtn) sendBtn.disabled = !on;
+    // 设置页账号区（如果存在）
+    const accBox = document.getElementById('accountInfo');
+    if (accBox) {
+      accBox.innerHTML = on
+        ? `<div class="account-on"><span class="account-ava">${esc(s.username?.[0]?.toUpperCase() || '?')}</span><span>${esc(s.username || '')}</span></div>`
+        : `<div class="account-off">未登录</div>`;
+    }
+  };
+  auth.onAuthChange(updateAuthUI);
+
+  loginBtn.onclick = () => {
+    loginError.hidden = true;
+    loginPass.value = '';
+    loginModal.hidden = false;
+    loginUser.focus();
+  };
+  logoutBtn.onclick = () => auth.logout();
+  loginModal.onclick = (e) => { if (e.target === loginModal) loginModal.hidden = true; };
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !loginModal.hidden) loginModal.hidden = true;
+  });
+
+  loginForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('loginSubmit');
+    btn.disabled = true; btn.textContent = '登录中…';
+    loginError.hidden = true;
+    try {
+      await auth.login(loginUser.value.trim(), loginPass.value);
+      loginPass.value = ''; // 提交后清空密码
+      loginModal.hidden = true;
+    } catch (err) {
+      loginError.textContent = err.message || '登录失败';
+      loginError.hidden = false;
+    }
+    btn.disabled = false; btn.textContent = '登 录';
+  };
+
+  // 启动时从服务端恢复登录状态
+  updateAuthUI(auth.getAuth());
+  auth.refreshAuth();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initApp);

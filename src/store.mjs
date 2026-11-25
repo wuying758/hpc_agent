@@ -22,6 +22,7 @@ function migrate(db) {
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       title TEXT DEFAULT '新会话',
+      owner TEXT,
       pinned INTEGER DEFAULT 0,
       archived INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
@@ -44,6 +45,7 @@ function migrate(db) {
       title TEXT NOT NULL,
       status TEXT DEFAULT 'running',
       session_id TEXT,
+      owner TEXT,
       days INTEGER DEFAULT 7,
       conclusion TEXT,
       error TEXT,
@@ -67,6 +69,7 @@ function migrate(db) {
       id TEXT PRIMARY KEY,
       task_id TEXT,
       session_id TEXT,
+      owner TEXT,
       job_ids TEXT,
       tool_name TEXT,
       query TEXT,
@@ -87,6 +90,7 @@ function migrate(db) {
       job_id INTEGER,
       reason TEXT,
       status TEXT DEFAULT 'pending',
+      owner TEXT,
       task_id TEXT,
       session_id TEXT,
       evidence_id TEXT,
@@ -106,9 +110,23 @@ function migrate(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_tev_ticket ON ticket_events(ticket_id);
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS login_sessions (
+      sid TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      hpc_token TEXT NOT NULL,
+      token_exp INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
   // 兼容旧库
   try { db.exec('ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE sessions ADD COLUMN archived INTEGER DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE sessions ADD COLUMN owner TEXT'); } catch {}
+  try { db.exec('ALTER TABLE tasks ADD COLUMN owner TEXT'); } catch {}
+  try { db.exec('ALTER TABLE evidence ADD COLUMN owner TEXT'); } catch {}
+  try { db.exec('ALTER TABLE tickets ADD COLUMN owner TEXT'); } catch {}
+  try { db.exec('ALTER TABLE messages ADD COLUMN suggest TEXT'); } catch {}
 
   // 首次导入：从 data/sessions/*.json 导入旧会话
   importLegacySessions(db);
@@ -160,24 +178,28 @@ function importLegacyTickets(db) {
 }
 
 // ===== 会话 =====
-export function listSessions({ q, limit = 50 } = {}) {
+export function listSessions({ q, limit = 50, owner } = {}) {
   const db = getDB();
-  let rows;
+  // owner 未传 → 不按用户过滤（兼容）；传了 → 只返回该用户会话（未归属历史不出现）
+  const where = owner != null ? 'WHERE s.owner = ?' : '';
+  const base = owner != null ? [owner] : [];
   const order = `ORDER BY s.pinned DESC, s.updated_at DESC LIMIT ?`;
+  let rows;
   if (q) {
     rows = db.prepare(`SELECT s.*, m.preview FROM sessions s
       LEFT JOIN (SELECT session_id, content as preview, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) rn FROM messages WHERE role='user') m
       ON m.session_id = s.id AND m.rn = 1
-      WHERE s.title LIKE ? OR m.preview LIKE ? ${order}`).all(`%${q}%`, `%${q}%`, limit);
+      ${where} AND (s.title LIKE ? OR m.preview LIKE ?) ${order}`).all(...base, `%${q}%`, `%${q}%`, limit);
   } else {
     rows = db.prepare(`SELECT s.*, m.preview FROM sessions s
       LEFT JOIN (SELECT session_id, content as preview, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) rn FROM messages WHERE role='user') m
       ON m.session_id = s.id AND m.rn = 1
-      ${order}`).all(limit);
+      ${where} ${order}`).all(...base, limit);
   }
   return rows;
 }
 
+// 校验会话归属：返回会话，不属于该 owner（或 owner 为 null 时要求会话无归属）则 null
 export function getSession(id) {
   const db = getDB();
   const s = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
@@ -185,11 +207,16 @@ export function getSession(id) {
   s.messages = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY id').all(id);
   return s;
 }
+// 只取会话元信息（不带消息），用于快速归属校验
+export function getSessionMeta(id) {
+  const db = getDB();
+  return db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) || null;
+}
 
-export function createSession(title = '新会话') {
+export function createSession(title = '新会话', owner = null) {
   const db = getDB();
   const id = 's-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  db.prepare('INSERT INTO sessions (id, title) VALUES (?,?)').run(id, title);
+  db.prepare('INSERT INTO sessions (id, title, owner) VALUES (?,?,?)').run(id, title, owner);
   return id;
 }
 
@@ -217,33 +244,54 @@ export function deleteSession(id) {
   db.prepare('DELETE FROM sessions WHERE id=?').run(id);
 }
 
-export function addMessage(sessionId, role, content, { reasoning, toolCalls } = {}) {
+export function addMessage(sessionId, role, content, { reasoning, toolCalls, suggest } = {}) {
   const db = getDB();
-  db.prepare('INSERT INTO messages (session_id, role, content, reasoning_content, tool_calls) VALUES (?,?,?,?,?)')
-    .run(sessionId, role, content || '', reasoning || null, toolCalls ? JSON.stringify(toolCalls) : null);
+  db.prepare('INSERT INTO messages (session_id, role, content, reasoning_content, tool_calls, suggest) VALUES (?,?,?,?,?,?)')
+    .run(sessionId, role, content || '', reasoning || null, toolCalls ? JSON.stringify(toolCalls) : null, suggest ? JSON.stringify(suggest) : null);
   db.prepare(`UPDATE sessions SET updated_at=datetime('now') WHERE id=?`).run(sessionId);
 }
 
 export function getSessionHistory(sessionId) {
   const db = getDB();
-  return db.prepare('SELECT role, content, reasoning_content, tool_calls FROM messages WHERE session_id=? ORDER BY id').all(sessionId)
+  return db.prepare('SELECT role, content, reasoning_content, tool_calls, suggest FROM messages WHERE session_id=? ORDER BY id').all(sessionId)
     .map(m => {
       const o = { role: m.role, content: m.content || '' };
       if (m.reasoning_content) o.reasoning_content = m.reasoning_content;
       if (m.tool_calls) { try { o.tool_calls = JSON.parse(m.tool_calls); } catch {} }
+      if (m.suggest) { try { o.suggest = JSON.parse(m.suggest); } catch {} }
       return o;
     });
 }
 
-// ===== 分析任务 =====
-export function createTask({ id, title, sessionId, days }) {
+// ===== 登录会话（服务端存储 HPC token）=====
+export function createLoginSession({ sid, username, hpc_token, token_exp }) {
   const db = getDB();
-  db.prepare('INSERT OR REPLACE INTO tasks (id, title, session_id, days, status) VALUES (?,?,?,?,?)')
-    .run(id, title, sessionId || null, days || 7, 'running');
+  db.prepare('INSERT OR REPLACE INTO login_sessions (sid, username, hpc_token, token_exp) VALUES (?,?,?,?)')
+    .run(sid, username, hpc_token, token_exp);
 }
 
-export function listTasks({ status } = {}) {
+export function getLoginSession(sid) {
   const db = getDB();
+  return db.prepare('SELECT * FROM login_sessions WHERE sid=?').get(sid) || null;
+}
+
+export function deleteLoginSession(sid) {
+  const db = getDB();
+  db.prepare('DELETE FROM login_sessions WHERE sid=?').run(sid);
+}
+
+// ===== 分析任务 =====
+export function createTask({ id, title, sessionId, days, owner }) {
+  const db = getDB();
+  db.prepare('INSERT OR REPLACE INTO tasks (id, title, session_id, owner, days, status) VALUES (?,?,?,?,?,?)')
+    .run(id, title, sessionId || null, owner || null, days || 7, 'running');
+}
+
+export function listTasks({ status, owner } = {}) {
+  const db = getDB();
+  // owner 未传 → 不过滤（兼容）；传了 → 只返回该用户任务
+  if (status && owner != null) return db.prepare('SELECT * FROM tasks WHERE status=? AND owner=? ORDER BY created_at DESC').all(status, owner);
+  if (owner != null) return db.prepare('SELECT * FROM tasks WHERE owner=? ORDER BY created_at DESC LIMIT 100').all(owner);
   if (status) return db.prepare('SELECT * FROM tasks WHERE status=? ORDER BY created_at DESC').all(status);
   return db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT 100').all();
 }
@@ -280,9 +328,9 @@ export function deleteTask(id) {
 export function createEvidence(fields) {
   const db = getDB();
   const id = 'E' + Date.now().toString(36).toUpperCase() + Math.floor(Math.random() * 100);
-  db.prepare(`INSERT INTO evidence (id, task_id, session_id, job_ids, tool_name, query, window, source, data_collected_at, key_fields, calculation, conclusion, kind)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .run(id, fields.taskId || null, fields.sessionId || null, fields.jobIds || null, fields.toolName || '',
+  db.prepare(`INSERT INTO evidence (id, task_id, session_id, owner, job_ids, tool_name, query, window, source, data_collected_at, key_fields, calculation, conclusion, kind)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, fields.taskId || null, fields.sessionId || null, fields.owner || null, fields.jobIds || null, fields.toolName || '',
       fields.query || '', fields.window || '', fields.source || 'local-cache',
       fields.dataCollectedAt || null, fields.keyFields || null, fields.calculation || null,
       fields.conclusion || '', fields.kind || 'fact');
@@ -293,26 +341,29 @@ export function getEvidence(id) {
   return getDB().prepare('SELECT * FROM evidence WHERE id=?').get(id) || null;
 }
 
-export function listEvidence({ taskId, sessionId } = {}) {
+export function listEvidence({ taskId, sessionId, owner } = {}) {
   const db = getDB();
   if (taskId) return db.prepare('SELECT * FROM evidence WHERE task_id=? ORDER BY created_at').all(taskId);
   if (sessionId) return db.prepare('SELECT * FROM evidence WHERE session_id=? ORDER BY created_at').all(sessionId);
+  if (owner != null) return db.prepare('SELECT * FROM evidence WHERE owner=? ORDER BY created_at DESC LIMIT 100').all(owner);
   return db.prepare('SELECT * FROM evidence ORDER BY created_at DESC LIMIT 100').all();
 }
 
 // ===== 工单 =====
-export function createTicket({ id, action, jobId, reason, status, taskId, sessionId, evidenceId, conclusion }) {
+export function createTicket({ id, action, jobId, reason, status, owner, taskId, sessionId, evidenceId, conclusion }) {
   const db = getDB();
-  db.prepare(`INSERT OR REPLACE INTO tickets (id, action, job_id, reason, status, task_id, session_id, evidence_id, conclusion)
-    VALUES (?,?,?,?,?,?,?,?,?)`).run(id, action, jobId || null, reason || '', status || 'pending',
-    taskId || null, sessionId || null, evidenceId || null, conclusion || null);
-  db.prepare('INSERT INTO ticket_events (ticket_id, event, note, actor) VALUES (?,?,?,?)').run(id, 'created', reason || '', 'system');
+  db.prepare(`INSERT OR REPLACE INTO tickets (id, action, job_id, reason, status, owner, task_id, session_id, evidence_id, conclusion)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id, action, jobId || null, reason || '', status || 'pending',
+    owner || null, taskId || null, sessionId || null, evidenceId || null, conclusion || null);
+  // 创建事件的操作者由服务端当前身份填写
+  db.prepare('INSERT INTO ticket_events (ticket_id, event, note, actor) VALUES (?,?,?,?)').run(id, 'created', reason || '', owner || 'system');
   return id;
 }
 
-export function listTickets({ status, q, limit = 50 } = {}) {
+export function listTickets({ status, q, owner, limit = 50 } = {}) {
   const db = getDB();
   let sql = 'SELECT * FROM tickets WHERE 1=1', params = [];
+  if (owner != null) { sql += ' AND owner=?'; params.push(owner); }
   if (status) { sql += ' AND status=?'; params.push(status); }
   if (q) { sql += ' AND (id LIKE ? OR reason LIKE ?)'; params.push(`%${q}%`, `%${q}%`); }
   sql += ' ORDER BY updated_at DESC LIMIT ?'; params.push(limit);
@@ -330,7 +381,8 @@ export function getTicket(id) {
 export function updateTicket(id, { status, note, actor = 'user' }) {
   const db = getDB();
   if (status) db.prepare(`UPDATE tickets SET status=?, updated_at=datetime('now') WHERE id=?`).run(status, id);
-  db.prepare('INSERT INTO ticket_events (ticket_id, event, note, actor) VALUES (?,?,?,?)').run(id, status ? `status→${status}` : 'note', note || '', actor);
+  // actor 由服务端当前身份传入，不再信任前端
+  db.prepare('INSERT INTO ticket_events (ticket_id, event, note, actor) VALUES (?,?,?,?)').run(id, status ? `status→${status}` : 'note', note || '', actor || 'user');
 }
 
 export function deleteTicket(id) {

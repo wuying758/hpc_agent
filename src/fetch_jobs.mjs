@@ -52,10 +52,10 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 /**
  * 执行增量拉取（Web 和 CLI 共用）。
- * @param {{days?: number, start?: number, end?: number}} opts
+ * @param {{days?: number, start?: number, end?: number, conn?: object}} opts
  * @returns {Promise<{total: number, elapsed: number}>}
  */
-export async function fetchAndSave({ days = 7, start: startArg, end: endArg } = {}) {
+export async function fetchAndSave({ days = 7, start: startArg, end: endArg, conn } = {}) {
   const now = Math.floor(Date.now() / 1000);
   let start, end = endArg || now;
   if (startArg) {
@@ -85,7 +85,7 @@ export async function fetchAndSave({ days = 7, start: startArg, end: endArg } = 
   }
   for (let s = start; s < end; s += CHUNK) {
     const e = Math.min(s + CHUNK, end);
-    const jobs = await fetchRange(s, e);
+    const jobs = await fetchRange(s, e, { conn });
     total += jobs.length;
     for (const j of jobs) {
       const t = j.submit || e;

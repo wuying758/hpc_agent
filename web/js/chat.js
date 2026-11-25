@@ -2,8 +2,14 @@
 import { state } from './store.js';
 import { esc, renderMarkdown, api } from './utils.js';
 import { isNarrowLayout, setPanelOpen } from './panels.js';
+import * as auth from './auth.js';
 
 let sid = null, busy = false, pendingQueue = [];
+
+// 保存的 sid 按账号区分（key: hpc_sid_<username>）
+function sidKey(user) { return 'hpc_sid_' + (user || 'anon'); }
+function saveSid(id, user) { try { if (id) localStorage.setItem(sidKey(user), id); else localStorage.removeItem(sidKey(user)); } catch {} }
+function loadSavedSid(user) { try { return localStorage.getItem(sidKey(user)) || null; } catch { return null; } }
 let activeRun = null, viewVersion = 0, sessionLoad = null, sessionLoading = false;
 let sessionListVersion = 0;
 
@@ -48,18 +54,43 @@ export function initChat() {
   }).catch(() => {});
   sel.onchange = () => { try { localStorage.setItem('model', sel.value); } catch {} };
   updateCtx(null);
-  let saved;
-  try { saved = localStorage.getItem('sid'); } catch {}
+  // 当前账号的会话由 auth.onAccountChange 在 refreshAuth 解析后统一恢复
+
+  // 退出/切换账号：停止当前回复、清空待发送队列；登录/刷新后恢复该账号会话
+  auth.onAccountChange((u) => {
+    resetChatForAccount();
+    if (u) restoreSessionForAccount();
+  });
+}
+
+function resetChatForAccount() {
+  changeConversation(); // 停流 + 清空 pendingQueue
+  sid = null;
+  state.sessionId = null;
+  saveSid(null, auth.getAuth().username);
+  $msgs().innerHTML = '<div class="chat-content"></div>';
+  $q().value = '';
+  autoGrow();
+  updateCtx(null);
+  showChatNotice('');
+  showWelcome();
+  document.getElementById('chatSessionTitle').textContent = '基于集群数据的自然语言问答与诊断';
+  if (isNarrowLayout()) setPanelOpen('sessionPanel', false);
+  loadSessionList();
+}
+
+// 恢复当前账号上次打开的会话（登录/刷新后调用）
+export function restoreSessionForAccount() {
+  const user = auth.getAuth().username;
+  if (!user) return;
+  const saved = loadSavedSid(user);
   if (saved) loadSession(saved, { initial: true });
 }
 
 function selectSession(id, title = '基于集群数据的自然语言问答与诊断') {
   sid = id;
   state.sessionId = id;
-  try {
-    if (id) localStorage.setItem('sid', id);
-    else localStorage.removeItem('sid');
-  } catch {}
+  saveSid(id, auth.getAuth().username);
   document.getElementById('chatSessionTitle').textContent = title;
 }
 
@@ -258,10 +289,12 @@ async function doSend(message) {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
       body: JSON.stringify({ session_id: requestSid, message, model: document.getElementById('modelSel').value }),
       signal: controller.signal,
     });
     if (!isCurrent()) return;
+    if (res.status === 401) { auth.refreshAuth(); throw new Error('登录已过期，请重新登录后再试。'); }
     if (!res.ok) throw new Error(`请求失败（${res.status}）：${await res.text()}`);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -608,6 +641,7 @@ export async function loadSession(id, { initial = false } = {}) {
           bubble.appendChild(reason);
         }
         newTextSeg(bubble).body.innerHTML = renderMarkdown(message.content || '');
+        if (message.suggest) setQuickItems(message.suggest, bubble);
       }
     }
     updateCtx(null);

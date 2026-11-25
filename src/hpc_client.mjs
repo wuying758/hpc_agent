@@ -3,6 +3,7 @@
 // HPC_API_URL  / HPC_DOMAIN / HPC_OPERATOR / HPC_PASSWORD
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath } from 'node:url';
 
 // 与 src/agent.mjs 相同的轻量 .env 解析：已存在的 process.env 优先
@@ -23,26 +24,70 @@ export function checkCreds() {
   }
 }
 
-let cached = null; // { token, exp }
+// ===== 按请求隔离的连接上下文 =====
+// 用 AsyncLocalStorage 把「当前登录用户的 HPC 连接」绑定到每个请求的异步任务链。
+// 两个用户并发操作时，各自的请求/重试始终使用各自身份，互不串号。
+const als = new AsyncLocalStorage();
+export const runWithHpc = (conn, fn) => als.run(conn || null, fn);
+export function currentHpc() { return als.getStore() || null; }
 
-export async function getToken() {
-  checkCreds();
-  if (cached && cached.exp > Date.now() + 60_000) return cached.token;
+// 凭据失效 / 需重新登录（用户登录态失效，刷 token 无用）
+export class AuthError extends Error {
+  constructor(message) { super(message); this.name = 'AuthError'; this.needReauth = true; }
+}
+
+// 每个 conn 独立缓存刷新后的 token（多用户并发互不覆盖）
+function _cached(c) { if (!c._cache) c._cache = {}; return c._cache; }
+
+// 当前上下文是否允许「静默刷新 token」（= 有登录用户且其即服务端 .env 用户）
+function connCanRefresh() {
+  const conn = currentHpc();
+  return !!(conn && conn.token && conn.isServerUser && CREDS.operator === conn.operator);
+}
+
+// 用一组 operator/password 向 HPC 换 token（登录态失效时抛 AuthError）
+async function _fetchToken(domain, operator, password) {
   const res = await fetch(BASE + '/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(CREDS),
+    body: JSON.stringify({ domain, operator, password }),
   });
-  if (!res.ok) throw new Error('token fail: ' + res.status + ' ' + (await res.text()).slice(0, 200));
   const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) throw new AuthError('HPC 凭据失效，请重新登录');
+    throw new Error('token fail: ' + res.status + ' ' + text.slice(0, 200));
+  }
   const token = text.replace(/^Bearer\s+/, '');
   let exp = Date.now() + 11 * 3600_000;
   try {
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
     exp = payload.exp * 1000;
   } catch {}
-  cached = { token, exp };
-  return token;
+  return { token, exp };
+}
+
+// 取当前上下文里可用的 token。无用户连接（如 CLI/后台服务）时回退到 .env 凭据。
+export async function getToken() {
+  const conn = currentHpc();
+  if (conn && conn.token) {
+    if (conn.tokenExp && conn.tokenExp > Date.now() + 60_000) return conn.token; // 未过期
+    // 过期：若该用户是服务端自身 .env 用户 → 可静默刷新（jaccount 只读）；否则需重新登录
+    if (connCanRefresh()) {
+      const c = _cached(conn);
+      if (c.token && c.exp > Date.now() + 60_000) return c.token;
+      const fresh = await _fetchToken(CREDS.domain, CREDS.operator, CREDS.password);
+      c.token = fresh.token; c.exp = fresh.exp;
+      return fresh.token;
+    }
+    throw new AuthError('HPC 会话已过期，请重新登录');
+  }
+  // 无登录上下文（CLI / 后台服务凭据）
+  checkCreds();
+  const c = _cached({});
+  if (c.token && c.exp > Date.now() + 60_000) return c.token;
+  const fresh = await _fetchToken(CREDS.domain, CREDS.operator, CREDS.password);
+  c.token = fresh.token; c.exp = fresh.exp;
+  return fresh.token;
 }
 
 async function api(path, tries = 4) {
@@ -57,10 +102,11 @@ async function api(path, tries = 4) {
       if (!res.ok) {
         const body = (await res.text()).slice(0, 200);
         if (res.status === 401) {
-          // 认证失败：清缓存并重新获取新 token，下轮迭代用新 token 重试
-          cached = null;
-          token = await getToken();
-          continue;
+          // 认证失败：若可刷新则重取新 token 再试；否则为凭据失效 → 需重新登录
+          if (connCanRefresh()) { token = await getToken(); continue; }
+          const e = new AuthError('HPC 凭据失效，请重新登录');
+          e.noRetry = true;
+          throw e;
         }
         const err = new Error(`GET ${path} -> ${res.status}: ${body}`);
         err.status = res.status;
@@ -71,7 +117,7 @@ async function api(path, tries = 4) {
       return await res.json();
     } catch (e) {
       lastErr = e;
-      if (e.noRetry) break; // 4xx（非 401）直接失败，不重试不等待
+      if (e.noRetry) break; // 4xx / 凭据失效：直接失败，不重试不等待
       await new Promise(r => setTimeout(r, 3000 * (i + 1)));
     }
   }
@@ -83,6 +129,7 @@ async function apiChunked(path) {
   try {
     return await api(path);
   } catch (e) {
+    if (e.name === 'AuthError') throw e; // 凭据失效不拆窗口，直接抛
     const m = path.match(/start_time=(\d+)&end_time=(\d+)/);
     if (!m) throw e;
     const s = +m[1], en = +m[2];
@@ -124,12 +171,13 @@ function compact(j) {
 }
 
 // 拉取 [startSec, endSec]，按 50min 切片（API 限制 ≤1h），失败自动对半拆
-export async function fetchRange(startSec, endSec, { onProgress } = {}) {
+export async function fetchRange(startSec, endSec, { onProgress, conn } = {}) {
   const CH = 3000;
   const out = [];
+  const run = (fn) => conn ? runWithHpc(conn, fn) : fn();
   for (let s = startSec; s < endSec; s += CH) {
     const e = Math.min(s + CH, endSec);
-    const d = await apiChunked(`/slurmdb/jobs?start_time=${s}&end_time=${e}`);
+    const d = await run(() => apiChunked(`/slurmdb/jobs?start_time=${s}&end_time=${e}`));
     const jobs = (d.jobs || []).map(compact);
     out.push(...jobs);
     if (onProgress) onProgress(e, jobs.length);
