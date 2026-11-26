@@ -45,14 +45,28 @@ export function initChat() {
   loadSessionList();
 
   const sel = document.getElementById('modelSel');
-  api('/api/models').then(d => {
-    sel.replaceChildren(...d.models.map(model => new Option(model, model, false, model === d.default)));
-    try {
-      const saved = localStorage.getItem('model');
-      if (saved && d.models.includes(saved)) sel.value = saved;
-    } catch {}
-  }).catch(() => {});
-  sel.onchange = () => { try { localStorage.setItem('model', sel.value); } catch {} };
+  const USE_DEFAULT = '__use_my_default__';
+  // 临时模型选择按账号区分（key: hpc_model_<user>）
+  const modelKey = () => 'hpc_model_' + (auth.getAuth().username || 'anon');
+  function renderModelSel(d) {
+    // 首项：使用我的默认模型（不传显式 model，由网关默认）
+    const opts = [new Option('使用我的默认模型', USE_DEFAULT)];
+    for (const m of (d.models || [])) opts.push(new Option(m, m, false, m === d.default));
+    sel.replaceChildren(...opts);
+    let saved = null;
+    try { saved = localStorage.getItem(modelKey()); } catch {}
+    if (saved && sel.value !== saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+    else sel.value = USE_DEFAULT;
+    // 未配置个人模型 → 在下方提示设置入口
+    const hint = document.getElementById('modelHint');
+    if (hint) {
+      if (d.configured) { hint.textContent = '使用你保存的模型'; hint.hidden = false; }
+      else { hint.innerHTML = '未配置个人模型，将用部署默认。<a class="model-set-link" id="modelSetLink">去设置</a>'; hint.hidden = false;
+        document.getElementById('modelSetLink')?.addEventListener('click', () => { window.openSettings && window.openSettings('appearance'); }); }
+    }
+  }
+  api('/api/models').then(renderModelSel).catch(() => {});
+  sel.onchange = () => { try { localStorage.setItem(modelKey(), sel.value); } catch {} };
   updateCtx(null);
   // 当前账号的会话由 auth.onAccountChange 在 refreshAuth 解析后统一恢复
 
@@ -60,6 +74,8 @@ export function initChat() {
   auth.onAccountChange((u) => {
     resetChatForAccount();
     if (u) restoreSessionForAccount();
+    // 切换账号后重新拉取该账号的模型列表（不同人可能配置不同模型服务）
+    api('/api/models').then(renderModelSel).catch(() => {});
   });
 }
 

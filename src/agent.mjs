@@ -198,22 +198,26 @@ const SYSTEM_PROMPT = `你是"超算低效作业识别智能体"，服务于上�
 8. 时间窗口：默认查最近 7 天。用户说“最近 X 天”“这周”“上个月”等就按对应天数传 days 参数（支持 1~30 天）；未说明时默认 7 天，并在回答里明确口径（如“近 7 天”“近 30 天”）。`;
 
 // 生成跟进候选问题（非流式短调用，失败返回 null，前端保留旧按钮）
-async function genSuggestions(history, lastUserMsg, lastReply, model) {
+// llm: 用户配置快照；model 为 undefined/'' 表示用快照默认，USE_DEFAULT_MODEL 表示省略显式 model
+const USE_DEFAULT_MODEL = '__use_my_default__';
+export { USE_DEFAULT_MODEL };
+async function genSuggestions(history, lastUserMsg, lastReply, model, llm) {
   try {
+    const base = (llm?.baseUrl || cfg.baseUrl).replace(/\/$/, '');
+    const key = llm?.apiKey ?? cfg.apiKey;
     // 只带最近 2 轮，控制 token
     const recent = history.slice(-2).concat([{ role: 'user', content: lastUserMsg }, { role: 'assistant', content: lastReply.slice(0, 1500) }]);
-    const res = await fetch(cfg.baseUrl.replace(/\/$/, '') + '/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.apiKey },
-      body: JSON.stringify({
-        model: model || cfg.model, temperature: 0.4, max_tokens: 200,
-        messages: [
-          { role: 'system', content: '你是超算低效作业识别助手的“下一步建议”生成器。根据对话上下文，生成 4 个用户接下来最可能想问的跟进问题。要求：\n- 紧扣当前话题，具体、可操作（如“核查失败作业的具体原因”“看 p-xxx 用户的作业明细”“换成排队过久类别”“优化后续时限配置”）\n- **零 CPU 记录不是空转证据**，不要建议“终止空转作业”；**已结束作业不推荐暂停/终止**，只建议核查原因、优化配置\n- 每个 ≤ 16 字，适合做按钮文案\n- 只输出 JSON 数组，如 ["问题1","问题2","问题3","问题4"]，不要任何其他文字、不要 markdown' },
-          ...recent,
-          { role: 'user', content: '请生成 4 个跟进问题，只输出 JSON 数组。' },
-        ],
-      }),
-    });
+    const body = { temperature: 0.4, max_tokens: 200,
+      messages: [
+        { role: 'system', content: '你是超算低效作业识别助手的“下一步建议”生成器。根据对话上下文，生成 4 个用户接下来最可能想问的跟进问题。要求：\n- 紧扣当前话题，具体、可操作（如“核查失败作业的具体原因”“看 p-xxx 用户的作业明细”“换成排队过久类别”“优化后续时限配置”）\n- **零 CPU 记录不是空转证据**，不要建议“终止空转作业”；**已结束作业不推荐暂停/终止**，只建议核查原因、优化配置\n- 每个 ≤ 16 字，适合做按钮文案\n- 只输出 JSON 数组，如 ["问题1","问题2","问题3","问题4"]，不要任何其他文字、不要 markdown' },
+        ...recent,
+        { role: 'user', content: '请生成 4 个跟进问题，只输出 JSON 数组。' },
+      ],
+    };
+    const resolvedModel = model || (llm?.model ?? cfg.model) || null;
+    // USE_DEFAULT_MODEL（或空）→ 省略显式 model，交给网关默认
+    if (model !== USE_DEFAULT_MODEL && resolvedModel) body.model = resolvedModel;
+    const res = await fetch(base + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify(body) });
     if (!res.ok) return null;
     const data = await res.json();
     const txt = (data.choices?.[0]?.message?.content || '').trim();
@@ -227,15 +231,18 @@ async function genSuggestions(history, lastUserMsg, lastReply, model) {
 }
 
 // 带重试的 LLM 调用（网络抖动 fetch failed 时重试，避免临时断连直接失败）
-export async function llmFetch(body, { retries = 2, timeoutMs = 120000 } = {}) {
+// llm: 当前用户配置快照 {baseUrl, apiKey, model}；缺省回退部署默认 cfg
+export async function llmFetch(body, { retries = 2, timeoutMs = 120000, llm } = {}) {
+  const base = (llm?.baseUrl || cfg.baseUrl).replace(/\/+$/, '');
+  const key = llm?.apiKey ?? cfg.apiKey;
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      const res = await fetch(cfg.baseUrl.replace(/\/$/, '') + '/chat/completions', {
+      const res = await fetch(base + '/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cfg.apiKey },
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
         body: JSON.stringify(body),
         signal: ctrl.signal,
       });
@@ -250,19 +257,24 @@ export async function llmFetch(body, { retries = 2, timeoutMs = 120000 } = {}) {
   throw lastErr;
 }
 
-export async function* agentChat(history, userMsg, { onTool, model, ctx } = {}) {
-  const useModel = model || cfg.model;  // 用户可选模型，默认 cfg.model
+export async function* agentChat(history, userMsg, { onTool, model, ctx, llm } = {}) {
+  // 模型解析：
+  //  - 显式选了某个模型 → 用它
+  //  - “使用我的默认模型”(USE_DEFAULT_MODEL) → 请求体省略显式 model，交给（用户的）模型服务默认
+  //  - 未传 model（空）→ 用快照默认（用户配置的默认模型或部署默认）
+  const omitModel = model === USE_DEFAULT_MODEL;
+  const useModel = omitModel ? undefined : (model || llm?.model || cfg.model || undefined);
   const msgs = [...history, { role: 'user', content: userMsg }];
   const calledSig = new Set();  // 防重复：已调用过的 (工具名+参数) 签名
   for (let step = 0; step < 8; step++) {
     // 流式调用 LLM：边收 SSE delta 边 yield，前端逐字显示（带网络重试）
     let res;
     try {
-      res = await llmFetch({ model: useModel,
-        messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...msgs],
-        tools: toOpenAITools(), temperature: 0.7, stream: true });
+      const llmBody = { messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...msgs], tools: toOpenAITools(), temperature: 0.7, stream: true };
+      if (useModel) llmBody.model = useModel;
+      res = await llmFetch(llmBody, { llm });
     } catch (e) {
-      yield { type: 'text', text: '❌ 连接模型服务失败（可能是网络抖动或模型暂时不可用）：' + e.message + '\n\n请稍后重试，或检查服务器到 models.sjtu.edu.cn 的网络。' };
+      yield { type: 'text', text: '❌ 连接模型服务失败（可能是网络抖动或模型暂时不可用）：' + e.message + '\n\n请稍后重试，或检查模型服务的连接。' };
       return;
     }
     if (!res.ok) throw new Error('LLM ' + res.status + ': ' + (await res.text()).slice(0, 300));
@@ -314,8 +326,8 @@ export async function* agentChat(history, userMsg, { onTool, model, ctx } = {}) 
     if (!m.content && !m.reasoning_content && !m.tool_calls?.length) throw new Error('LLM 返回异常（无内容无工具）');
     if (!m.tool_calls?.length) {
       msgs.push(m);
-      // 主回复完成：异步生成跟进候选问题（失败则 null，前端保留旧按钮）
-      const sugg = await genSuggestions(history, userMsg, m.content, useModel);
+      // 主回复完成：异步生成跟进候选问题（失败则 null，前端保留旧按钮）——沿用同一用户配置快照
+      const sugg = await genSuggestions(history, userMsg, m.content, model, llm);
       if (sugg) yield { type: 'suggest', items: sugg };
       return;
     }

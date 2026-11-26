@@ -9,7 +9,7 @@ import { agentChat, cfg, tools, validateTicketAction, llmFetch } from './agent.m
 import { analyze, loadJobs, getAnalysis } from './analyze.mjs';
 import * as store from './store.mjs';
 import { checkCreds, getToken, runWithHpc } from './hpc_client.mjs';
-import { encryptApiKey, decryptApiKey, validateTarget, checkModels } from './llm_config.mjs';
+import { encryptApiKey, decryptApiKey, validateTarget, checkModels, resolveLlmSnapshot } from './llm_config.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.PORT || 8899);
@@ -146,8 +146,10 @@ async function executeTask(taskId, userMsg, days, conn) {
   let evCounter = 0;
   try {
     // 后台任务启动时固定所属用户的 HPC 连接上下文，整个执行过程始终用该身份
+    // 同时取一次该用户的模型配置快照，任务全程沿用
+    const llm = await resolveLlmSnapshot(task.owner);
     await runWithHpc(conn, async () => {
-      for await (const ev of agentChat(store.getSessionHistory(task.session_id || ''), userMsg, { ctx: { owner: task.owner, sessionId: task.session_id || null, taskId } })) {
+      for await (const ev of agentChat(store.getSessionHistory(task.session_id || ''), userMsg, { ctx: { owner: task.owner, sessionId: task.session_id || null, taskId }, llm })) {
         if (ac.signal.aborted) { store.updateTask(taskId, { status: 'cancelled', finished_at: new Date().toISOString() }); return; }
         if (ev.type === 'narrate') { stepSeq++; store.addTaskStep(taskId, stepSeq, 'narrate', ev.text); }
         if (ev.type === 'tool_done') {
@@ -267,8 +269,10 @@ const server = http.createServer(async (req, res) => {
 
       // 以该登录用户的 HPC 连接上下文运行整个对话（含工具调用），按请求隔离
       const conn = { token: login.hpc_token, tokenExp: login.token_exp, operator: login.username, isServerUser: login.username === process.env.HPC_OPERATOR };
+      // 本轮对话开始时取一次模型配置快照；后续工具循环/重试/建议/标题沿用同一快照
+      const llm = await resolveLlmSnapshot(login.username);
       await runWithHpc(conn, async () => {
-        for await (const ev of agentChat(hist, message, { model, ctx: { owner: login.username, sessionId: sid } })) {
+        for await (const ev of agentChat(hist, message, { model, ctx: { owner: login.username, sessionId: sid }, llm })) {
           if (clientGone) break;
           if (ev.type === 'reasoning') { reasoning += ev.content; write({ t: 'reasoning', d: ev.content }); }
           if (ev.type === 'text') { reply += ev.text; write({ t: 'text', d: ev.text }); }
@@ -286,7 +290,7 @@ const server = http.createServer(async (req, res) => {
         const ctxPct = Math.min(100, Math.round(allMsgs.reduce((s, m) => s + (m.content || '').length, 0) / 1.6 / 32000 * 100));
         // 仅首轮对话用 LLM 生成会话标题
         if (hist.length === 0) {
-          const title = await genSessionTitle(message, reply, model);
+          const title = await genSessionTitle(message, reply, model, llm);
           if (title) {
             store.renameSession(sid, title);
             write({ t: 'title', title });
@@ -297,14 +301,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ===== 模型列表 =====
+    // ===== 模型列表（用当前登录用户的模型连接）=====
     if (url.pathname === '/api/models') {
+      const login = currentLogin(req);
+      const llm = await resolveLlmSnapshot(login ? login.username : null);
       try {
-        const r = await fetch(cfg.baseUrl.replace(/\/$/, '') + '/models', { headers: { Authorization: 'Bearer ' + cfg.apiKey } });
-        const d = await r.json();
-        send(200, { models: (d.data || []).map(m => m.id).filter(Boolean), default: cfg.model });
+        const base = (llm.baseUrl || cfg.baseUrl).replace(/\/$/, '');
+        const key = llm.apiKey ?? cfg.apiKey;
+        const r = await fetch(base + '/models', { headers: { Authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(10000) });
+        const d = await r.json().catch(() => null);
+        const models = (d?.data || d || []).map(m => (typeof m === 'string' ? m : m?.id || m?.name)).filter(Boolean);
+        send(200, { models: models.length ? models : ['qwen', 'deepseek-chat', 'deepseek-reasoner'], default: llm.model || cfg.model, configured: llm.configured });
       } catch {
-        send(200, { models: ['qwen', 'deepseek-chat', 'deepseek-reasoner'], default: cfg.model });
+        send(200, { models: ['qwen', 'deepseek-chat', 'deepseek-reasoner'], default: llm.model || cfg.model, configured: llm.configured });
       }
       return;
     }
@@ -609,7 +618,9 @@ const server = http.createServer(async (req, res) => {
         result.hpc = { ok: false, error: e.message.slice(0, 200), needReauth: !!e.needReauth };
       }
       try {
-        const r = await fetch(cfg.baseUrl.replace(/\/$/, '') + '/models', { headers: { Authorization: 'Bearer ' + cfg.apiKey }, signal: AbortSignal.timeout(10000) });
+        const llm = await resolveLlmSnapshot(login ? login.username : null);
+        const base = (llm.baseUrl || cfg.baseUrl).replace(/\/$/, '');
+        const r = await fetch(base + '/models', { headers: { Authorization: 'Bearer ' + (llm.apiKey ?? cfg.apiKey) }, signal: AbortSignal.timeout(10000) });
         result.llm = { ok: r.ok, status: r.status };
       } catch (e) { result.llm = { ok: false, error: e.message.slice(0, 200) }; }
       send(200, result);
@@ -750,16 +761,19 @@ const server = http.createServer(async (req, res) => {
 });
 
 // 用 LLM 生成会话标题
-async function genSessionTitle(userMsg, reply, model) {
+async function genSessionTitle(userMsg, reply, model, llm) {
   try {
-    const res = await llmFetch({
-      model: model || cfg.model, temperature: 0.3, max_tokens: 30,
+    const body = {
+      temperature: 0.3, max_tokens: 30,
       messages: [
         { role: 'system', content: '根据用户问题和助手回答，生成一个概括性的会话主题标签（4~10字，中文名词短语，如"超时作业排查""反复失败分析""集群资源概况""作业诊断"）。不要重复用户原话，不要标点、引号、问号。只输出主题。' },
         { role: 'user', content: userMsg.slice(0, 200) },
         { role: 'assistant', content: reply.slice(0, 500) },
       ],
-    }, { retries: 1, timeoutMs: 15000 });
+    };
+    const resolvedModel = (model && model !== USE_DEFAULT_MODEL) ? model : (llm?.model ?? cfg.model);
+    if (model !== USE_DEFAULT_MODEL && resolvedModel) body.model = resolvedModel;
+    const res = await llmFetch(body, { retries: 1, timeoutMs: 15000, llm });
     if (!res.ok) return null;
     const data = await res.json();
     const title = (data.choices?.[0]?.message?.content || '').trim().replace(/[\"'。\.,!！?？]/g, '');

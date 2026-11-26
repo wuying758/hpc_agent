@@ -149,3 +149,24 @@ export async function checkModels({ baseUrl, apiKey }) {
     clearTimeout(timer);
   }
 }
+
+// ===== 配置快照：每轮聊天/任务开始时取一次，后续工具循环/重试/建议/标题沿用同一快照 =====
+// 取当前用户的模型连接；未配置则回退部署默认。
+// @returns {{baseUrl: string, apiKey: string, model: string|null, configured: boolean}}
+export async function resolveLlmSnapshot(owner) {
+  const defBase = (process.env.LLM_BASE_URL || '').replace(/\/+$/, '');
+  const defKey = process.env.LLM_API_KEY || '';
+  const defModel = process.env.LLM_MODEL || null;
+  if (!owner) return { baseUrl: defBase, apiKey: defKey, model: defModel, configured: false };
+  let row = null;
+  try { row = (await import('./store.mjs')).getUserLlmConfig(owner); } catch { row = null; }
+  if (!row || !row.base_url) {
+    return { baseUrl: defBase, apiKey: defKey, model: defModel, configured: false };
+  }
+  const key = row.api_key_enc ? decryptApiKey(row.api_key_enc) : null;
+  if (!key) {
+    // 密钥解密失败（主密钥变更）→ 回退部署默认，避免直接报错中断
+    return { baseUrl: defBase, apiKey: defKey, model: defModel, configured: false };
+  }
+  return { baseUrl: row.base_url.replace(/\/+$/, ''), apiKey: key, model: row.model || defModel, configured: true };
+}
