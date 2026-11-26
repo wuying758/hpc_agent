@@ -119,6 +119,17 @@ function migrate(db) {
       created_at TEXT DEFAULT (datetime('now'))
     );
   `);
+  // 个人模型配置（API Key 加密存储）
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_llm_config (
+      owner TEXT PRIMARY KEY,
+      base_url TEXT,
+      api_key_enc TEXT,
+      model TEXT,
+      version INTEGER DEFAULT 1,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
   // 兼容旧库
   try { db.exec('ALTER TABLE sessions ADD COLUMN pinned INTEGER DEFAULT 0'); } catch {}
   try { db.exec('ALTER TABLE sessions ADD COLUMN archived INTEGER DEFAULT 0'); } catch {}
@@ -278,6 +289,19 @@ export function getLoginSession(sid) {
 export function deleteLoginSession(sid) {
   const db = getDB();
   db.prepare('DELETE FROM login_sessions WHERE sid=?').run(sid);
+}
+
+// ===== 个人模型配置 =====
+// 存储加密后的 api_key_enc；读取时返回密文（不还原），由 server 层解密后使用
+export function getUserLlmConfig(owner) {
+  const db = getDB();
+  return db.prepare('SELECT * FROM user_llm_config WHERE owner=?').get(owner) || null;
+}
+export function saveUserLlmConfig({ owner, baseUrl, apiKeyEnc, model, version }) {
+  const db = getDB();
+  db.prepare(`INSERT OR REPLACE INTO user_llm_config (owner, base_url, api_key_enc, model, version, updated_at)
+              VALUES (?,?,?,?,?,datetime('now'))`)
+    .run(owner, baseUrl || null, apiKeyEnc || null, model || null, version || 1);
 }
 
 // ===== 分析任务 =====

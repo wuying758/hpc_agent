@@ -9,6 +9,7 @@ import { agentChat, cfg, tools, validateTicketAction, llmFetch } from './agent.m
 import { analyze, loadJobs, getAnalysis } from './analyze.mjs';
 import * as store from './store.mjs';
 import { checkCreds, getToken, runWithHpc } from './hpc_client.mjs';
+import { encryptApiKey, decryptApiKey, validateTarget, checkModels } from './llm_config.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.PORT || 8899);
@@ -614,6 +615,97 @@ const server = http.createServer(async (req, res) => {
       send(200, result);
       return;
     }
+    // ===== 个人模型配置 =====
+    // 查询当前用户的配置（只返回 hasApiKey，不返回原密钥）
+    if (url.pathname === '/api/llm-config' && req.method === 'GET') {
+      const login = currentLogin(req);
+      if (!login) { send(401, { error: '未登录，请先登录 JAccount' }); return; }
+      const row = store.getUserLlmConfig(login.username);
+      if (!row || !row.base_url) {
+        // 未配置：回退到部署默认（只暴露默认网关信息，不暴露默认密钥）
+        send(200, {
+          configured: false,
+          baseUrl: process.env.LLM_BASE_URL || null,
+          model: process.env.LLM_MODEL || null,
+          hasApiKey: !!(process.env.LLM_API_KEY),
+          version: 0,
+        });
+        return;
+      }
+      // 验证密文是否仍可解密（主密钥是否可用）
+      const canDecrypt = row.api_key_enc ? !!decryptApiKey(row.api_key_enc) : false;
+      send(200, {
+        configured: true,
+        baseUrl: row.base_url,
+        model: row.model,
+        hasApiKey: canDecrypt,
+        version: row.version || 1,
+        updatedAt: row.updated_at,
+      });
+      return;
+    }
+
+    // 保存当前用户的配置
+    //  body: { baseUrl, apiKey?, model?, version? }
+    //  - apiKey 留空 → 保留旧密钥（更换服务来源时需重新填写）
+    if (url.pathname === '/api/llm-config' && req.method === 'POST') {
+      const login = currentLogin(req);
+      if (!login) { send(401, { error: '未登录，请先登录 JAccount' }); return; }
+      const body = JSON.parse(await new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => r(b)); }));
+      const baseUrl = (body.baseUrl || '').trim();
+      const model = (body.model || '').trim();
+      const newKey = (body.apiKey || '').trim();
+      const prev = store.getUserLlmConfig(login.username) || {};
+      const prevBaseUrl = (prev.base_url || '').trim();
+      const prevKeyPlain = prev.api_key_enc ? decryptApiKey(prev.api_key_enc) : null;
+
+      // 目标校验（允许访问的服务目标）
+      if (baseUrl) {
+        const t = validateTarget(baseUrl);
+        if (!t.ok) { send(400, { error: t.reason }); return; }
+      }
+
+      // 密钥保留逻辑：
+      //  - 换了服务来源（baseUrl 变了）且未填新密钥 → 要求重新填写
+      //  - 未填密钥但服务来源未变 → 保留旧密钥
+      let keyPlain = null;
+      if (newKey) keyPlain = newKey;
+      else if (prevBaseUrl && baseUrl && prevBaseUrl.replace(/\/+$/, '') !== baseUrl.replace(/\/+$/, '')) {
+        send(400, { error: '更换了服务来源，请重新填写 API Key' }); return;
+      } else if (prevKeyPlain) keyPlain = prevKeyPlain;
+
+      if (!baseUrl) { send(400, { error: '请填写服务地址' }); return; }
+
+      const nextVersion = (prev.version || 0) + 1;
+      store.saveUserLlmConfig({
+        owner: login.username,
+        baseUrl: baseUrl.replace(/\/+$/, ''),
+        apiKeyEnc: keyPlain ? encryptApiKey(keyPlain) : null,
+        model: model || null,
+        version: nextVersion,
+      });
+      send(200, {
+        ok: true,
+        configured: true,
+        baseUrl: baseUrl.replace(/\/+$/, ''),
+        model: model || null,
+        hasApiKey: !!keyPlain,
+        version: nextVersion,
+      });
+      return;
+    }
+
+    // 使用表单草稿检查模型列表（不入库存）
+    //  body: { baseUrl, apiKey }
+    if (url.pathname === '/api/llm-config/check' && req.method === 'POST') {
+      const login = currentLogin(req);
+      if (!login) { send(401, { error: '未登录，请先登录 JAccount' }); return; }
+      const body = JSON.parse(await new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => r(b)); }));
+      const result = await checkModels({ baseUrl: (body.baseUrl || '').trim(), apiKey: (body.apiKey || '').trim() });
+      send(200, result);
+      return;
+    }
+
     if (url.pathname === '/api/fetch-data' && req.method === 'POST') {
       // 触发共享数据更新（同一集群共用一个同步任务，单飞）
       // 需登录：用当前用户的 HPC token 采集
