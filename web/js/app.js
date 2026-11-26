@@ -18,6 +18,7 @@ const PAGES = {
   tickets: { el: 'page-tickets', init: initTickets },
 };
 const inited = new Set();
+let pendingSettingsGroup = null; // 直接打开旧 #/data 链接时，等 openSettings 初始化后再打开
 
 function closeNav() {
   document.getElementById('nav').classList.remove('open');
@@ -27,8 +28,13 @@ function closeNav() {
 
 function route() {
   const hash = window.location.hash.replace('#/', '') || 'chat';
-  // 旧链接 #/data → 打开设置的「数据与连接」分组
-  if (hash === 'data') { openSettings('data'); return; }
+  // 旧链接 #/data → 打开设置的「数据与连接」分组（需等 openSettings 初始化后再打开）
+  if (hash === 'data') {
+    if (typeof window.openSettings === 'function') { window.openSettings('data'); }
+    else { pendingSettingsGroup = 'data'; }
+    window.location.hash = '#/chat';
+    return;
+  }
   const page = PAGES[hash] ? hash : 'chat';
   for (const [key, p] of Object.entries(PAGES)) {
     document.getElementById(p.el).hidden = key !== page;
@@ -132,6 +138,12 @@ export function initApp() {
     document.getElementById('settingsClose').focus();
   };
   settingsBtn.onclick = () => window.openSettings('appearance');
+  // 直接打开旧 #/data 链接：route() 时 openSettings 尚未就绪，现在补上
+  if (pendingSettingsGroup) {
+    const g = pendingSettingsGroup;
+    pendingSettingsGroup = null;
+    window.openSettings(g);
+  }
   document.getElementById('settingsClose').onclick = closeSettings;
   settingsBackdrop.onclick = closeSettings;
   document.addEventListener('keydown', e => {

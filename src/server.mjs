@@ -48,6 +48,39 @@ function currentLogin(req) {
   return { sid, ...s };
 }
 
+// ===== 共享数据同步（同一集群共用一个同步任务，单飞）=====
+// 无论多少人点“更新数据”，同一时间只跑一个采集；其他人拿到共享进度。
+const syncState = { status: 'idle', startedAt: null, finishedAt: null, total: null, message: '', progress: 0, error: null, by: null };
+let syncRunning = null; // 正在跑的 Promise，用于防止并发重复启动
+async function startSync(conn) {
+  if (syncRunning) return { started: false, alreadyRunning: true };
+  const { fetchAndSave } = await import('./fetch_jobs.mjs');
+  if (!fetchAndSave) throw new Error('fetch 模块未导出 fetchAndSave');
+  syncState.status = 'running';
+  syncState.startedAt = Date.now();
+  syncState.finishedAt = null;
+  syncState.total = 0;
+  syncState.progress = 0;
+  syncState.error = null;
+  syncState.by = conn.operator;
+  syncState.message = '开始同步…';
+  syncRunning = (async () => {
+    try {
+      const r = await fetchAndSave({ conn, onProgress: (p) => { Object.assign(syncState, { progress: p.progress, total: p.total, message: p.message }); } });
+      if (r.skipped) { syncState.status = 'done'; syncState.message = r.reason; syncState.total = 0; }
+      else { syncState.status = 'done'; syncState.total = r.total; syncState.progress = 100; syncState.message = `同步完成，新增 ${r.total} 条作业，用时 ${(r.elapsed / 1000).toFixed(0)}s`; }
+    } catch (e) {
+      syncState.status = 'error';
+      syncState.error = e.message?.slice(0, 300) || String(e);
+      syncState.message = '同步失败：' + syncState.error;
+    } finally {
+      syncState.finishedAt = Date.now();
+      syncRunning = null;
+    }
+  })();
+  return { started: true, alreadyRunning: false };
+}
+
 // 会话归属校验：返回 { ok, session }。
 // 会话属于该用户（owner===username）→ ok；否则 404（隐藏存在性）。
 function ownSession(req, id) {
@@ -582,18 +615,30 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (url.pathname === '/api/fetch-data' && req.method === 'POST') {
-      // 触发数据更新（复用 fetch_jobs 逻辑，后台执行）
-      // 需登录：用当前用户的 HPC token 采集，不再允许未登录时用部署侧凭据拉取
+      // 触发共享数据更新（同一集群共用一个同步任务，单飞）
+      // 需登录：用当前用户的 HPC token 采集
       const login = currentLogin(req);
       if (!login) { send(401, { error: '未登录，请先登录后再更新数据' }); return; }
-      const { fetchAndSave } = await import('./fetch_jobs.mjs');
       const conn = { token: login.hpc_token, tokenExp: login.token_exp, operator: login.username, isServerUser: login.username === process.env.HPC_OPERATOR };
-      if (fetchAndSave) {
-        fetchAndSave({ conn }).then(r => console.log(`fetch ${login.username} done:`, r)).catch(e => console.error('fetch err:', e.message));
-        send(200, { started: true });
-      } else {
-        send(501, { error: 'fetch 模块未导出 fetchAndSave，请用 CLI: npm run fetch' });
+      try {
+        const r = await startSync(conn);
+        if (r.alreadyRunning) send(200, { started: false, alreadyRunning: true, status: syncState.status, message: syncState.message, progress: syncState.progress });
+        else send(200, { started: true, status: 'running', message: '已开始同步共享集群数据' });
+      } catch (e) {
+        send(500, { error: e.message });
       }
+      return;
+    }
+    // 共享同步进度（登录后可查，大家共用同一进度）
+    if (url.pathname === '/api/sync-status' && req.method === 'GET') {
+      if (!currentLogin(req)) { send(401, { error: '未登录' }); return; }
+      send(200, {
+        status: syncState.status,
+        startedAt: syncState.startedAt, finishedAt: syncState.finishedAt,
+        total: syncState.total, progress: syncState.progress,
+        message: syncState.message, error: syncState.error, by: syncState.by,
+        durationS: syncState.finishedAt && syncState.startedAt ? Math.round((syncState.finishedAt - syncState.startedAt) / 1000) : null,
+      });
       return;
     }
 

@@ -52,10 +52,10 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 /**
  * 执行增量拉取（Web 和 CLI 共用）。
- * @param {{days?: number, start?: number, end?: number, conn?: object}} opts
+ * @param {{days?: number, start?: number, end?: number, conn?: object, onProgress?: (p:any)=>void}} opts
  * @returns {Promise<{total: number, elapsed: number}>}
  */
-export async function fetchAndSave({ days = 7, start: startArg, end: endArg, conn } = {}) {
+export async function fetchAndSave({ days = 7, start: startArg, end: endArg, conn, onProgress } = {}) {
   const now = Math.floor(Date.now() / 1000);
   let start, end = endArg || now;
   if (startArg) {
@@ -83,6 +83,8 @@ export async function fetchAndSave({ days = 7, start: startArg, end: endArg, con
       arr.length = 0;
     }
   }
+  const nChunks = Math.max(1, Math.ceil((end - start) / CHUNK));
+  let doneChunks = 0;
   for (let s = start; s < end; s += CHUNK) {
     const e = Math.min(s + CHUNK, end);
     const jobs = await fetchRange(s, e, { conn });
@@ -93,6 +95,13 @@ export async function fetchAndSave({ days = 7, start: startArg, end: endArg, con
       (buckets[key] ||= []).push(j);
     }
     flush();
+    doneChunks++;
+    onProgress?.({
+      status: 'running', total,
+      progress: Math.round((doneChunks / nChunks) * 100),
+      chunk: { from: s, to: e },
+      message: `已拉取 ${total} 条（${doneChunks}/${nChunks} 个时间段）`,
+    });
   }
   flush();
   // 清除分析缓存
