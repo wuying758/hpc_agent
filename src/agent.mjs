@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyze, loadJobs, getAnalysis } from './analyze.mjs';
 import { api } from './hpc_client.mjs';
+import * as store from './store.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try {
@@ -132,7 +133,7 @@ const tools = [
       job_id: { type: 'number', description: '目标作业ID' },
       reason: { type: 'string', description: '操作依据（引用分析结论）' },
     },
-    run: async ({ action, job_id, reason }) => {
+    run: async ({ action, job_id, reason }, ctx = {}) => {
       const actName = { suspend: '暂停作业', terminate: '终止作业', quota: '配额调整', contact_user: '联系用户' }[action];
       // 白名单校验：暂停/终止只对仍在占用资源的活跃作业有效
       if (action === 'suspend' || action === 'terminate') {
@@ -142,14 +143,21 @@ const tools = [
           return { 拒绝: true, 原因: check.reason + '（来自本地 30 天缓存记录）', 建议: '如需跟进请核查失败原因、优化后续时限配置，或使用 contact_user 联系用户说明。' };
         }
       }
-      const ticket = { 工单号: 'TKT-' + Date.now().toString(36).toUpperCase(), 操作: actName,
-        目标作业: job_id, 依据: reason, 状态: '待人工确认', 状态来源: '本地 30 天缓存（非实时）',
+      // 写入工单中心（数据库），归属当前登录用户；与页面手动创建走同一记录
+      const id = 'TKT-' + Date.now().toString(36).toUpperCase();
+      store.createTicket({
+        id, action, jobId: job_id, reason,
+        status: 'pending',
+        owner: ctx.owner || 'system',
+        taskId: ctx.taskId || null,
+        sessionId: ctx.sessionId || null,
+      });
+      return {
+        工单号: id, 操作: actName, 目标作业: job_id, 依据: reason,
+        状态: '待人工确认', 状态来源: '本地 30 天缓存（非实时）',
         生成时间: new Date().toLocaleString('zh-CN'),
-        提示: '⚠️ 未执行任何操作，请运维在超算管理界面人工确认并执行。' };
-      const dir = path.join(ROOT, 'data', 'tickets');
-      fs.mkdirSync(dir, { recursive: true });
-      fs.appendFileSync(path.join(dir, 'tickets.jsonl'), JSON.stringify(ticket) + '\n');
-      return ticket;
+        提示: '⚠️ 未执行任何操作，已写入工单中心，请运维在超算管理界面人工确认并执行。',
+      };
     },
   },
 ];
@@ -242,7 +250,7 @@ export async function llmFetch(body, { retries = 2, timeoutMs = 120000 } = {}) {
   throw lastErr;
 }
 
-export async function* agentChat(history, userMsg, { onTool, model } = {}) {
+export async function* agentChat(history, userMsg, { onTool, model, ctx } = {}) {
   const useModel = model || cfg.model;  // 用户可选模型，默认 cfg.model
   const msgs = [...history, { role: 'user', content: userMsg }];
   const calledSig = new Set();  // 防重复：已调用过的 (工具名+参数) 签名
@@ -332,7 +340,7 @@ export async function* agentChat(history, userMsg, { onTool, model } = {}) {
         continue;
       }
       calledSig.add(sig);
-      try { result = await tool.run(args); } catch (e) { result = { error: e.message }; }
+      try { result = await tool.run(args, ctx || {}); } catch (e) { result = { error: e.message }; }
       const text = typeof result === 'string' ? result : JSON.stringify(result, null, 1);
       msgs.push({ role: 'tool', tool_call_id: tc.id, content: text.slice(0, 12000) });
       yield { type: 'tool_done', name: tc.function.name, result: text.slice(0, 2000) };

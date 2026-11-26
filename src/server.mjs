@@ -113,7 +113,7 @@ async function executeTask(taskId, userMsg, days, conn) {
   try {
     // 后台任务启动时固定所属用户的 HPC 连接上下文，整个执行过程始终用该身份
     await runWithHpc(conn, async () => {
-      for await (const ev of agentChat(store.getSessionHistory(task.session_id || ''), userMsg, { days })) {
+      for await (const ev of agentChat(store.getSessionHistory(task.session_id || ''), userMsg, { ctx: { owner: task.owner, sessionId: task.session_id || null, taskId } })) {
         if (ac.signal.aborted) { store.updateTask(taskId, { status: 'cancelled', finished_at: new Date().toISOString() }); return; }
         if (ev.type === 'narrate') { stepSeq++; store.addTaskStep(taskId, stepSeq, 'narrate', ev.text); }
         if (ev.type === 'tool_done') {
@@ -234,7 +234,7 @@ const server = http.createServer(async (req, res) => {
       // 以该登录用户的 HPC 连接上下文运行整个对话（含工具调用），按请求隔离
       const conn = { token: login.hpc_token, tokenExp: login.token_exp, operator: login.username, isServerUser: login.username === process.env.HPC_OPERATOR };
       await runWithHpc(conn, async () => {
-        for await (const ev of agentChat(hist, message, { model })) {
+        for await (const ev of agentChat(hist, message, { model, ctx: { owner: login.username, sessionId: sid } })) {
           if (clientGone) break;
           if (ev.type === 'reasoning') { reasoning += ev.content; write({ t: 'reasoning', d: ev.content }); }
           if (ev.type === 'text') { reply += ev.text; write({ t: 'text', d: ev.text }); }
