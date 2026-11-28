@@ -215,7 +215,10 @@ export function getSession(id) {
   const db = getDB();
   const s = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
   if (!s) return null;
-  s.messages = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY id').all(id);
+  s.messages = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY id').all(id).map(m => {
+    if (m.suggest) { try { m.suggest = JSON.parse(m.suggest); } catch { m.suggest = null; } }
+    return m;
+  });
   return s;
 }
 // 只取会话元信息（不带消息），用于快速归属校验

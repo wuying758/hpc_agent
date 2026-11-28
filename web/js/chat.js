@@ -12,6 +12,7 @@ function saveSid(id, user) { try { if (id) localStorage.setItem(sidKey(user), id
 function loadSavedSid(user) { try { return localStorage.getItem(sidKey(user)) || null; } catch { return null; } }
 let activeRun = null, viewVersion = 0, sessionLoad = null, sessionLoading = false;
 let sessionListVersion = 0;
+let modelVersion = 0, modelReady = false, modelLoading = false;
 
 const $msgs = () => document.getElementById('msgs');
 const $q = () => document.getElementById('q');
@@ -45,28 +46,15 @@ export function initChat() {
   loadSessionList();
 
   const sel = document.getElementById('modelSel');
-  const USE_DEFAULT = '__use_my_default__';
-  // 临时模型选择按账号区分（key: hpc_model_<user>）
-  const modelKey = () => 'hpc_model_' + (auth.getAuth().username || 'anon');
-  function renderModelSel(d) {
-    // 首项：使用我的默认模型（不传显式 model，由网关默认）
-    const opts = [new Option('使用我的默认模型', USE_DEFAULT)];
-    for (const m of (d.models || [])) opts.push(new Option(m, m, false, m === d.default));
-    sel.replaceChildren(...opts);
-    let saved = null;
-    try { saved = localStorage.getItem(modelKey()); } catch {}
-    if (saved && sel.value !== saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
-    else sel.value = USE_DEFAULT;
-    // 未配置个人模型 → 在下方提示设置入口
-    const hint = document.getElementById('modelHint');
-    if (hint) {
-      if (d.configured) { hint.textContent = '使用你保存的模型'; hint.hidden = false; }
-      else { hint.innerHTML = '未配置个人模型，将用部署默认。<a class="model-set-link" id="modelSetLink">去设置</a>'; hint.hidden = false;
-        document.getElementById('modelSetLink')?.addEventListener('click', () => { window.openSettings && window.openSettings('appearance'); }); }
-    }
-  }
-  api('/api/models').then(renderModelSel).catch(() => {});
-  sel.onchange = () => { try { localStorage.setItem(modelKey(), sel.value); } catch {} };
+  sel.onchange = () => {
+    try { localStorage.setItem(modelKey(), JSON.stringify({ value: sel.value, baseUrl: sel.dataset.baseUrl })); } catch {}
+  };
+  window.addEventListener('model-config-changed', e => {
+    if (e.detail.owner !== auth.getAuth().username) return;
+    try { localStorage.removeItem(modelKey()); } catch {}
+    refreshModels();
+  });
+  refreshModels();
   updateCtx(null);
   // 当前账号的会话由 auth.onAccountChange 在 refreshAuth 解析后统一恢复
 
@@ -75,8 +63,48 @@ export function initChat() {
     resetChatForAccount();
     if (u) restoreSessionForAccount();
     // 切换账号后重新拉取该账号的模型列表（不同人可能配置不同模型服务）
-    api('/api/models').then(renderModelSel).catch(() => {});
+    refreshModels();
   });
+  if (auth.isLogged()) restoreSessionForAccount();
+}
+
+function modelKey() { return 'hpc_model_' + auth.getAuth().username; }
+async function refreshModels() {
+  const version = ++modelVersion, sel = document.getElementById('modelSel'), hint = document.getElementById('modelHint');
+  modelReady = false; modelLoading = auth.isLogged();
+  sel.replaceChildren(new Option('我的默认模型', ''));
+  sel.disabled = true;
+  hint.hidden = !auth.isLogged();
+  hint.textContent = auth.isLogged() ? '正在读取个人模型配置…' : '';
+  if (!auth.isLogged()) return;
+  const link = (message, label = '设置模型') => {
+    hint.textContent = message;
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'model-set-link';
+    btn.textContent = label; btn.onclick = () => window.openSettings('model'); hint.append(btn);
+  };
+  try {
+    const config = await api('/api/llm-config');
+    if (version !== modelVersion) return;
+    modelLoading = false;
+    modelReady = !!(config.configured && config.hasApiKey && config.model);
+    if (!modelReady) { link('连接个人模型后开始分析。'); return; }
+    sel.dataset.baseUrl = config.baseUrl;
+    sel.options[0].textContent = `我的默认模型 · ${config.model}`;
+    sel.disabled = false;
+    link(`个人默认：${config.model}`, '管理');
+    const models = await api('/api/models');
+    if (version !== modelVersion) return;
+    sel.replaceChildren(new Option(`我的默认模型 · ${config.model}`, ''), ...(models.models || []).map(id => new Option(id, id)));
+    try {
+      const saved = JSON.parse(localStorage.getItem(modelKey()) || 'null');
+      if (saved?.baseUrl === config.baseUrl && [...sel.options].some(o => o.value === saved.value)) sel.value = saved.value;
+    } catch {}
+    if (models.error) link(`模型列表暂时不可用，仍可使用默认模型 ${config.model}。`, '管理');
+  } catch (e) {
+    if (version !== modelVersion) return;
+    modelLoading = false;
+    if (!modelReady) link('模型配置读取失败。', '前往设置');
+  }
 }
 
 function resetChatForAccount() {
@@ -196,6 +224,12 @@ window.__chatSend = message => {
 function send() {
   const message = $q().value.trim();
   if (!message || sessionLoading) return;
+  if (!auth.isLogged()) { window.openLogin?.(); return; }
+  if (!modelReady) {
+    if (modelLoading) showChatNotice('正在读取模型配置，请稍候再发送。');
+    else window.openSettings('model');
+    return;
+  }
   $q().value = '';
   autoGrow();
   if (busy) {
@@ -305,12 +339,15 @@ async function doSend(message) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ session_id: requestSid, message, model: document.getElementById('modelSel').value }),
+      body: JSON.stringify({ session_id: requestSid, message, ...(document.getElementById('modelSel').value ? { model: document.getElementById('modelSel').value } : {}) }),
       signal: controller.signal,
     });
     if (!isCurrent()) return;
     if (res.status === 401) { auth.refreshAuth(); throw new Error('登录已过期，请重新登录后再试。'); }
-    if (!res.ok) throw new Error(`请求失败（${res.status}）：${await res.text()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error || `请求失败（${res.status}）`);
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -470,8 +507,8 @@ function setStopUI(on) {
   btn.classList.toggle('stop-mode', on);
   btn.title = on ? '停止回复' : '发送';
   btn.setAttribute('aria-label', btn.title);
-  btn.disabled = sessionLoading;
-  $q().disabled = sessionLoading;
+  btn.disabled = sessionLoading || !auth.isLogged();
+  $q().disabled = sessionLoading || !auth.isLogged();
   state.busy = on;
 }
 
@@ -665,7 +702,7 @@ export async function loadSession(id, { initial = false } = {}) {
     loadSessionList();
   } catch (error) {
     if (version !== viewVersion || error.name === 'AbortError') return;
-    if (initial && error.message.startsWith('404 ')) selectSession(null);
+    if (initial && error.status === 404) selectSession(null);
     showChatNotice('会话打开失败：' + error.message, {
       error: true, retry: () => loadSession(id, { initial }),
     });

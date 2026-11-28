@@ -198,13 +198,13 @@ const SYSTEM_PROMPT = `你是"超算低效作业识别智能体"，服务于上�
 8. 时间窗口：默认查最近 7 天。用户说“最近 X 天”“这周”“上个月”等就按对应天数传 days 参数（支持 1~30 天）；未说明时默认 7 天，并在回答里明确口径（如“近 7 天”“近 30 天”）。`;
 
 // 生成跟进候选问题（非流式短调用，失败返回 null，前端保留旧按钮）
-// llm: 用户配置快照；model 为 undefined/'' 表示用快照默认，USE_DEFAULT_MODEL 表示省略显式 model
+// llm: 用户配置快照；未显式选择模型时沿用快照默认。
 const USE_DEFAULT_MODEL = '__use_my_default__';
 export { USE_DEFAULT_MODEL };
 async function genSuggestions(history, lastUserMsg, lastReply, model, llm) {
   try {
-    const base = (llm?.baseUrl || cfg.baseUrl).replace(/\/$/, '');
-    const key = llm?.apiKey ?? cfg.apiKey;
+    const base = (llm || cfg).baseUrl.replace(/\/$/, '');
+    const key = (llm || cfg).apiKey;
     // 只带最近 2 轮，控制 token
     const recent = history.slice(-2).concat([{ role: 'user', content: lastUserMsg }, { role: 'assistant', content: lastReply.slice(0, 1500) }]);
     const body = { temperature: 0.4, max_tokens: 200,
@@ -214,10 +214,9 @@ async function genSuggestions(history, lastUserMsg, lastReply, model, llm) {
         { role: 'user', content: '请生成 4 个跟进问题，只输出 JSON 数组。' },
       ],
     };
-    const resolvedModel = model || (llm?.model ?? cfg.model) || null;
-    // USE_DEFAULT_MODEL（或空）→ 省略显式 model，交给网关默认
-    if (model !== USE_DEFAULT_MODEL && resolvedModel) body.model = resolvedModel;
-    const res = await fetch(base + '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify(body) });
+    const resolvedModel = (model && model !== USE_DEFAULT_MODEL) ? model : (llm || cfg).model;
+    if (resolvedModel) body.model = resolvedModel;
+    const res = await fetch(base + '/chat/completions', { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, body: JSON.stringify(body) });
     if (!res.ok) return null;
     const data = await res.json();
     const txt = (data.choices?.[0]?.message?.content || '').trim();
@@ -233,8 +232,8 @@ async function genSuggestions(history, lastUserMsg, lastReply, model, llm) {
 // 带重试的 LLM 调用（网络抖动 fetch failed 时重试，避免临时断连直接失败）
 // llm: 当前用户配置快照 {baseUrl, apiKey, model}；缺省回退部署默认 cfg
 export async function llmFetch(body, { retries = 2, timeoutMs = 120000, llm } = {}) {
-  const base = (llm?.baseUrl || cfg.baseUrl).replace(/\/+$/, '');
-  const key = llm?.apiKey ?? cfg.apiKey;
+  const base = (llm || cfg).baseUrl.replace(/\/+$/, '');
+  const key = (llm || cfg).apiKey;
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -242,6 +241,7 @@ export async function llmFetch(body, { retries = 2, timeoutMs = 120000, llm } = 
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       const res = await fetch(base + '/chat/completions', {
         method: 'POST',
+        redirect: 'error',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
         body: JSON.stringify(body),
         signal: ctrl.signal,
@@ -258,12 +258,8 @@ export async function llmFetch(body, { retries = 2, timeoutMs = 120000, llm } = 
 }
 
 export async function* agentChat(history, userMsg, { onTool, model, ctx, llm } = {}) {
-  // 模型解析：
-  //  - 显式选了某个模型 → 用它
-  //  - “使用我的默认模型”(USE_DEFAULT_MODEL) → 请求体省略显式 model，交给（用户的）模型服务默认
-  //  - 未传 model（空）→ 用快照默认（用户配置的默认模型或部署默认）
-  const omitModel = model === USE_DEFAULT_MODEL;
-  const useModel = omitModel ? undefined : (model || llm?.model || cfg.model || undefined);
+  // 空值或旧版默认标记都使用本轮快照的默认模型。
+  const useModel = (model && model !== USE_DEFAULT_MODEL) ? model : (llm || cfg).model;
   const msgs = [...history, { role: 'user', content: userMsg }];
   const calledSig = new Set();  // 防重复：已调用过的 (工具名+参数) 签名
   for (let step = 0; step < 8; step++) {

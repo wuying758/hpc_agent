@@ -1,6 +1,7 @@
 // 集群总览（智能分析页右侧面板）
 import { isNarrowLayout, setPanelOpen } from './panels.js';
 import { esc, fmt, api } from './utils.js';
+import * as auth from './auth.js';
 
 let ovDays = 7;
 let expandedRow = null;
@@ -15,6 +16,14 @@ async function loadOverview() {
   const body = document.getElementById('ovBody');
   if (!body) return;
   const version = ++requestVersion;
+  if (!auth.isLogged()) {
+    loadedDays = null; expandedRow = null;
+    body.innerHTML = '<div class="ov-login-empty"><strong>登录后查看集群概览</strong><p>作业分布、资源时间与异常线索会显示在这里。</p><button type="button" class="btn btn-sm" id="ovLogin">登录 HPC 账号</button></div>';
+    document.getElementById('ovLogin').onclick = () => window.openLogin?.();
+    document.getElementById('ovNotice').hidden = true;
+    body.setAttribute('aria-busy', 'false');
+    return;
+  }
   const days = ovDays;
   body.setAttribute('aria-busy', 'true');
   document.getElementById('ovNotice').hidden = true;
@@ -373,6 +382,13 @@ function closeModal(modal) {
 }
 
 export function bindOverviewEvents() {
+  auth.onAccountChange(() => {
+    requestVersion++; loadedDays = null; expandedRow = null;
+    document.getElementById('ovBody').replaceChildren();
+    document.querySelectorAll('.ov-modal-overlay').forEach(el => el.remove());
+    loadOverview();
+  });
+  window.addEventListener('cluster-data-updated', loadOverview);
   document.addEventListener('keydown', e => {
     const modal = [...document.querySelectorAll('.ov-modal-overlay:not([hidden])')].pop();
     if (!modal) return;

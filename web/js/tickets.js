@@ -1,6 +1,8 @@
 // 工单中心
 import { state } from './store.js';
-import { esc, fmt, statePill, openDrawer, api, relTime, fmtDateTime } from './utils.js';
+import { esc, fmt, statePill, openDrawer, beginDrawerRequest, closeDrawer, api, relTime, fmtDateTime } from './utils.js';
+
+let listVersion = 0;
 
 const STATUS_MAP = { pending: '待处理', in_progress: '处理中', resolved: '已解决', cancelled: '已取消' };
 const STATUS_NEXT = { pending: 'in_progress', in_progress: 'resolved' };
@@ -15,14 +17,17 @@ export function refreshTickets() {
   if (sel) sel.value = '';
   const search = document.getElementById('tkSearch');
   if (search) search.value = '';
+  document.getElementById('ticketList').replaceChildren();
   loadTickets();
 }
 
 async function loadTickets() {
+  const version = ++listVersion;
   const list = document.getElementById('ticketList');
   if (!list) return;
   try {
     const tickets = await api(`/api/tickets${state.tStatus ? '?status=' + state.tStatus : ''}${state.tSearch ? (state.tStatus ? '&' : '?') + 'q=' + encodeURIComponent(state.tSearch) : ''}`);
+    if (version !== listVersion) return;
     if (!tickets.length) { list.innerHTML = '<div class="empty">暂无工单<br>诊断发现问题后可创建工单跟踪处理</div>'; return; }
     list.innerHTML = tickets.map(t => `
       <div class="ticket-row" data-tid="${t.id}">
@@ -34,12 +39,14 @@ async function loadTickets() {
         <span class="pill pill-${t.status}">${STATUS_MAP[t.status] || t.status}</span>
       </div>`).join('');
     list.querySelectorAll('.ticket-row').forEach(r => r.onclick = () => loadTicketDetail(r.dataset.tid));
-  } catch (e) { list.innerHTML = `<div class="empty">${e.message?.startsWith('401') ? '请先登录 JAccount' : '加载失败'}</div>`; }
+  } catch (e) { if (version !== listVersion) return; list.innerHTML = `<div class="empty">${e.status === 401 ? '请先登录 JAccount' : '加载失败'}</div>`; }
 }
 
 async function loadTicketDetail(id) {
+  const isCurrent = beginDrawerRequest();
   try {
     const t = await api('/api/tickets/' + id);
+    if (!isCurrent()) return;
     openDrawer(t.id, `
       <div style="margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -65,17 +72,19 @@ async function loadTicketDetail(id) {
     const nextBtn = document.getElementById('tkNext');
     if (nextBtn) nextBtn.onclick = async () => {
       await api('/api/tickets/' + id, { method: 'PATCH', body: { status: STATUS_NEXT[t.status] } });
+      if (!isCurrent()) return;
       loadTicketDetail(id); loadTickets();
     };
     const noteBtn = document.getElementById('tkNote');
     if (noteBtn) noteBtn.onclick = async () => {
       const note = prompt('处理备注：');
-      if (note) { await api(`/api/tickets/${id}/events`, { method: 'POST', body: { note } }); loadTicketDetail(id); }
+      if (note) { await api(`/api/tickets/${id}/events`, { method: 'POST', body: { note } }); if (!isCurrent()) return; loadTicketDetail(id); }
     };
     const cancelBtn = document.getElementById('tkCancel');
     if (cancelBtn) cancelBtn.onclick = async () => {
       if (!confirm('取消此工单？')) return;
       await api('/api/tickets/' + id, { method: 'PATCH', body: { status: 'cancelled' } });
+      if (!isCurrent()) return;
       loadTicketDetail(id); loadTickets();
     };
   } catch (e) { console.error(e); }

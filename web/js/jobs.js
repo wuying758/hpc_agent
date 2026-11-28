@@ -1,6 +1,8 @@
 // 作业中心
 import { state } from './store.js';
-import { esc, fmt, statePill, openDrawer, api, relTime } from './utils.js';
+import { esc, fmt, statePill, openDrawer, beginDrawerRequest, closeDrawer, api, relTime } from './utils.js';
+
+let listVersion = 0;
 
 export function initJobs() { loadJobsList(); }
 
@@ -13,11 +15,13 @@ export function refreshJobs() {
 }
 
 async function loadJobsList() {
+  const version = ++listVersion;
   const tbody = document.querySelector('#jobsTable tbody');
   const info = document.getElementById('jobsInfo');
   if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--dimmer)">加载中…</td></tr>';
   try {
     const d = await api(`/api/jobs?days=${state.jDays}&page=${state.jPage}&size=20${state.jState ? '&state=' + state.jState : ''}${state.jSearch ? '&q=' + encodeURIComponent(state.jSearch) : ''}`);
+    if (version !== listVersion) return;
     if (info) info.textContent = `共 ${fmt(d.total)} 条 · ${d.口径}`;
     const totalPages = Math.ceil(d.total / d.size) || 1;
     document.getElementById('jPrev').disabled = state.jPage <= 1;
@@ -35,14 +39,17 @@ async function loadJobsList() {
     </tr>`).join('') || '<tr><td colspan="8" class="empty">无结果</td></tr>';
     if (tbody) tbody.querySelectorAll('tr[data-jid]').forEach(tr => tr.onclick = () => loadJobDetail(tr.dataset.jid));
   } catch (e) {
-    const msg = e.message?.startsWith('401') ? '请先登录 JAccount' : `加载失败: ${e.message}`;
+    if (version !== listVersion) return;
+    const msg = e.status === 401 ? '请先登录 JAccount' : `加载失败: ${e.message}`;
     if (tbody) tbody.innerHTML = `<tr><td colspan="8" style="color:var(--danger)">${esc(msg)}</td></tr>`;
   }
 }
 
 async function loadJobDetail(id) {
+  const isCurrent = beginDrawerRequest();
   try {
     const j = await api(`/api/jobs/${id}?days=30`);
+    if (!isCurrent()) return;
     const timeline = [];
     if (j.提交) timeline.push({ time: j.提交, text: '提交' });
     if (j.开始 !== '未开始') timeline.push({ time: j.开始, text: `开始运行（排队 ${j.排队分钟 != null ? j.排队分钟 + 'min' : '?'}）` });
@@ -72,7 +79,7 @@ async function loadJobDetail(id) {
       </div>
     `);
     document.getElementById('diagBtn').onclick = () => {
-      document.getElementById('drawer').hidden = true;
+      closeDrawer();
       navigate('chat');
       setTimeout(() => {
         document.getElementById('q').value = `诊断作业 #${j.id} 的低效原因`;

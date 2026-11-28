@@ -57,12 +57,29 @@ export async function api(path, opts = {}) {
     // 会话失效：同步登录状态（会重新显示登录入口、禁用对话输入）
     import('./auth.js').then(m => m.refreshAuth()).catch(() => {});
   }
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    let message = text;
+    try { message = JSON.parse(text).error || text; } catch {}
+    const error = new Error(message || `请求失败（${res.status}）`);
+    error.status = res.status;
+    throw error;
+  }
   return res.json();
+}
+let drawerVersion = 0;
+export function beginDrawerRequest() {
+  const version = ++drawerVersion;
+  return () => version === drawerVersion;
 }
 export function openDrawer(title, html) {
   document.getElementById('drawerTitle').textContent = title;
   document.getElementById('drawerBody').innerHTML = html;
   document.getElementById('drawer').hidden = false;
 }
-export function closeDrawer() { document.getElementById('drawer').hidden = true; }
+export function closeDrawer() {
+  drawerVersion++;
+  document.getElementById('drawer').hidden = true;
+  document.getElementById('drawerTitle').textContent = '';
+  document.getElementById('drawerBody').replaceChildren();
+}

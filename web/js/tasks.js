@@ -1,6 +1,9 @@
 // 分析任务中心
 import { state } from './store.js';
-import { esc, fmt, statePill, openDrawer, renderMarkdown, api, fmtDateTime } from './utils.js';
+import { esc, fmt, statePill, openDrawer, beginDrawerRequest, closeDrawer, renderMarkdown, api, fmtDateTime } from './utils.js';
+import * as auth from './auth.js';
+
+let listVersion = 0, accountVersion = 0;
 
 let pollTimer = null;
 
@@ -10,11 +13,16 @@ export function stopTasks() { if (pollTimer) { clearInterval(pollTimer); pollTim
 
 // 切换账号后：停止旧轮询、清空并重新加载当前用户任务
 export function refreshTasks() {
+  accountVersion++;
   stopTasks();
   const form = document.getElementById('taskForm');
   if (form) form.hidden = true;
+  document.getElementById('taskTitle').value = '';
+  document.getElementById('taskMsg').value = '';
+  document.getElementById('taskStart').disabled = false;
+  document.getElementById('taskList').replaceChildren();
   loadTasks();
-  startPoll();
+  if (state.page === 'tasks' && auth.isLogged()) startPoll();
 }
 
 function startPoll() {
@@ -22,15 +30,17 @@ function startPoll() {
   pollTimer = setInterval(() => {
     // 只有有 running 任务时才轮询
     const hasRunning = document.querySelector('#taskList .pill-running');
-    if (hasRunning) loadTasks();
+    if (hasRunning && state.page === 'tasks' && auth.isLogged()) loadTasks();
   }, 3000);
 }
 
 async function loadTasks() {
+  const version = ++listVersion;
   const list = document.getElementById('taskList');
   if (!list) return;
   try {
     const tasks = await api('/api/tasks');
+    if (version !== listVersion) return;
     if (!tasks.length) { list.innerHTML = '<div class="empty"><div class="icon">📊</div>暂无分析任务<br>发起分析后，步骤和结论会保存在这里</div>'; return; }
     list.innerHTML = tasks.map(t => `
       <div class="task-card" data-tid="${t.id}">
@@ -41,12 +51,14 @@ async function loadTasks() {
         <div class="tc-meta">${t.days}天 · ${fmtDateTime(t.created_at)} · 点击查看详情</div>
       </div>`).join('');
     list.querySelectorAll('.task-card').forEach(c => c.onclick = () => loadTaskDetail(c.dataset.tid));
-  } catch (e) { list.innerHTML = `<div class="empty">${e.message?.startsWith('401') ? '请先登录 JAccount' : '加载失败'}</div>`; }
+  } catch (e) { if (version !== listVersion) return; list.innerHTML = `<div class="empty">${e.status === 401 ? '请先登录 JAccount' : '加载失败'}</div>`; }
 }
 
 async function loadTaskDetail(id) {
+  const isCurrent = beginDrawerRequest();
   try {
     const t = await api('/api/tasks/' + id);
+    if (!isCurrent()) return;
     const statusMap = { running: '运行中', completed: '已完成', interrupted: '已中断（服务重启）', failed: '失败', cancelled: '已取消' };
     openDrawer(t.title, `
       <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px">
@@ -64,10 +76,10 @@ async function loadTaskDetail(id) {
       </div>
     `);
     const cancelBtn = document.getElementById('cancelTask');
-    if (cancelBtn) cancelBtn.onclick = async () => { await api(`/api/tasks/${id}/cancel`, { method: 'POST' }); loadTaskDetail(id); loadTasks(); };
+    if (cancelBtn) cancelBtn.onclick = async () => { await api(`/api/tasks/${id}/cancel`, { method: 'POST' }); if (!isCurrent()) return; loadTaskDetail(id); loadTasks(); };
     const retryBtn = document.getElementById('retryTask');
     if (retryBtn) retryBtn.onclick = () => {
-      document.getElementById('drawer').hidden = true;
+      closeDrawer();
       document.getElementById('taskTitle').value = t.title;
       document.getElementById('taskMsg').value = t.title;
       document.getElementById('taskDays').value = t.days;
@@ -75,7 +87,7 @@ async function loadTaskDetail(id) {
     };
     const sessBtn = document.getElementById('toSession');
     if (sessBtn && t.session_id) sessBtn.onclick = () => {
-      document.getElementById('drawer').hidden = true;
+      closeDrawer();
       window.__loadSession(t.session_id);
     };
   } catch (e) { console.error(e); }
@@ -84,6 +96,7 @@ async function loadTaskDetail(id) {
 export function bindTasksEvents() {
   const form = document.getElementById('taskForm');
   document.getElementById('taskNewBtn').onclick = () => {
+    if (!auth.isLogged()) { window.openLogin?.(); return; }
     form.hidden = false;
     document.getElementById('taskTitle').focus();
   };
@@ -93,14 +106,20 @@ export function bindTasksEvents() {
     const msg = document.getElementById('taskMsg').value.trim() || title;
     const days = +document.getElementById('taskDays').value || 7;
     if (!title) return;
+    const version = accountVersion;
     btn.disabled = true;
     try {
       await api('/api/tasks', { method: 'POST', body: { title, message: msg, days } });
+      if (version !== accountVersion) return;
       form.hidden = true;
       document.getElementById('taskTitle').value = '';
       document.getElementById('taskMsg').value = '';
       loadTasks();
-    } catch (e) { alert('发起失败: ' + e.message); }
+    } catch (e) {
+      if (version !== accountVersion) return;
+      if (e.status === 422) window.openSettings('model');
+      else alert('发起失败: ' + e.message);
+    }
     btn.disabled = false;
   };
   document.getElementById('taskCancelBtn')?.addEventListener('click', () => { form.hidden = true; });

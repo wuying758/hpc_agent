@@ -100,7 +100,7 @@ export function initPanels() {
     if (!narrow.matches) setPanelOpen('ovPanel', true, { animate: false });
   });
   document.addEventListener('keydown', e => {
-    if (e.key !== 'Escape' || document.querySelector('.ov-modal-overlay:not([hidden]), .settings-panel.open')) return;
+    if (e.key !== 'Escape' || document.querySelector('.ov-modal-overlay:not([hidden]), .settings-dialog.open, .login-modal-overlay:not([hidden])')) return;
     const item = [...panels.values()].find(panel => panel.open && panel.el.contains(document.activeElement));
     if (narrow.matches) closeChatPanels();
     else if (item) setPanelOpen(item.el.id, false);

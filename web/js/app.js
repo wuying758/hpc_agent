@@ -4,9 +4,9 @@ import { initChat, loadSession } from './chat.js';
 import { initJobs, bindJobsEvents, refreshJobs } from './jobs.js';
 import { initTasks, stopTasks, bindTasksEvents, refreshTasks } from './tasks.js';
 import { initTickets, bindTicketsEvents, refreshTickets } from './tickets.js';
-import { refreshDataGroup } from './data.js';
+import { initSettings, openSettings } from './settings.js';
 import * as auth from './auth.js';
-import { esc, closeDrawer } from './utils.js';
+import { closeDrawer } from './utils.js';
 import { initEvidence } from './evidence.js';
 import { initOverview, bindOverviewEvents } from './overview.js';
 import { initPanels, closeChatPanels, isNarrowLayout } from './panels.js';
@@ -18,7 +18,6 @@ const PAGES = {
   tickets: { el: 'page-tickets', init: initTickets },
 };
 const inited = new Set();
-let pendingSettingsGroup = null; // 直接打开旧 #/data 链接时，等 openSettings 初始化后再打开
 
 function closeNav() {
   document.getElementById('nav').classList.remove('open');
@@ -28,13 +27,7 @@ function closeNav() {
 
 function route() {
   const hash = window.location.hash.replace('#/', '') || 'chat';
-  // 旧链接 #/data → 打开设置的「数据与连接」分组（需等 openSettings 初始化后再打开）
-  if (hash === 'data') {
-    if (typeof window.openSettings === 'function') { window.openSettings('data'); }
-    else { pendingSettingsGroup = 'data'; }
-    window.location.hash = '#/chat';
-    return;
-  }
+  if (hash === 'data') { openSettings('data'); window.location.hash = '#/chat'; return; }
   const page = PAGES[hash] ? hash : 'chat';
   for (const [key, p] of Object.entries(PAGES)) {
     document.getElementById(p.el).hidden = key !== page;
@@ -59,6 +52,9 @@ function route() {
 
 export function initApp() {
   initPanels();
+  initSettings();
+  window.addEventListener('settings-opened', closeNav);
+  window.addEventListener('cluster-data-updated', () => { if (state.page === 'jobs') initJobs(); });
   window.__loadSession = id => {
     navigate('chat');
     route();
@@ -80,76 +76,8 @@ export function initApp() {
   document.getElementById('navBackdrop').onclick = closeNav;
   window.matchMedia('(max-width: 768px)').addEventListener('change', closeNav);
 
-  const settingsBtn = document.getElementById('settingsBtn');
-  const settingsPanel = document.getElementById('settingsPanel');
-  const settingsBackdrop = document.getElementById('settingsBackdrop');
-  let settingsTimer;
-
-  // ---- 主题切换 ----
-  const applyTheme = (t) => {
-    document.documentElement.dataset.theme = t;
-    try { localStorage.setItem('theme', t); } catch {}
-    document.querySelectorAll('.theme-option').forEach(b => {
-      b.classList.toggle('active', b.dataset.theme === t);
-    });
-  };
-  applyTheme(document.documentElement.dataset.theme || 'light');
-  document.querySelectorAll('.theme-option').forEach(b => {
-    b.onclick = () => applyTheme(b.dataset.theme);
-  });
-
-  // ---- 设置分组切换 ----
-  const navItems = document.querySelectorAll('#settingsNav .settings-nav-item');
-  const groups = document.querySelectorAll('.settings-group');
-  function showGroup(group) {
-    navItems.forEach(n => {
-      const on = n.dataset.group === group;
-      n.classList.toggle('active', on);
-      n.setAttribute('aria-selected', String(on));
-    });
-    groups.forEach(g => { g.hidden = g.dataset.group !== group; });
-    if (group === 'data') refreshDataGroup();
-  }
-  navItems.forEach(n => { n.onclick = () => showGroup(n.dataset.group); });
-
-  window.__showSettingsGroup = showGroup;
-
-  const closeSettings = () => {
-    settingsPanel.classList.remove('open');
-    settingsBackdrop.classList.remove('open');
-    settingsBtn.setAttribute('aria-expanded', 'false');
-    clearTimeout(settingsTimer);
-    settingsTimer = setTimeout(() => {
-      settingsPanel.hidden = true;
-      settingsBackdrop.hidden = true;
-    }, 200);
-    settingsBtn.focus();
-  };
-  window.openSettings = (group = 'appearance') => {
-    closeNav();
-    clearTimeout(settingsTimer);
-    settingsPanel.hidden = false;
-    settingsBackdrop.hidden = false;
-    settingsPanel.offsetHeight; // 强制 reflow
-    showGroup(group);
-    settingsPanel.classList.add('open');
-    settingsBackdrop.classList.add('open');
-    settingsBtn.setAttribute('aria-expanded', 'true');
-    document.getElementById('settingsClose').focus();
-  };
-  settingsBtn.onclick = () => window.openSettings('appearance');
-  // 直接打开旧 #/data 链接：route() 时 openSettings 尚未就绪，现在补上
-  if (pendingSettingsGroup) {
-    const g = pendingSettingsGroup;
-    pendingSettingsGroup = null;
-    window.openSettings(g);
-  }
-  document.getElementById('settingsClose').onclick = closeSettings;
-  settingsBackdrop.onclick = closeSettings;
   document.addEventListener('keydown', e => {
-    if (e.key !== 'Escape') return;
-    if (settingsPanel.classList.contains('open')) closeSettings();
-    else closeNav();
+    if (e.key === 'Escape' && document.getElementById('settingsPanel').hidden) closeNav();
   });
 
   bindJobsEvents();
@@ -182,13 +110,6 @@ function initAuth() {
     if (on) { q.disabled = false; q.placeholder = '描述你想排查的问题，或输入作业 ID…'; }
     else { q.disabled = true; q.placeholder = '请先登录 JAccount 后开始对话'; }
     if (sendBtn) sendBtn.disabled = !on;
-    // 设置页账号区（如果存在）
-    const accBox = document.getElementById('accountInfo');
-    if (accBox) {
-      accBox.innerHTML = on
-        ? `<div class="account-on"><span class="account-ava">${esc(s.username?.[0]?.toUpperCase() || '?')}</span><span>${esc(s.username || '')}</span></div>`
-        : `<div class="account-off">未登录</div>`;
-    }
   };
   auth.onAuthChange(updateAuthUI);
 
@@ -201,16 +122,42 @@ function initAuth() {
     refreshJobs();
   });
 
-  loginBtn.onclick = () => {
+  let loginReturnFocus;
+  window.openLogin = () => {
+    closeNav();
+    loginReturnFocus = document.activeElement;
     loginError.hidden = true;
     loginPass.value = '';
     loginModal.hidden = false;
+    document.getElementById('settingsPanel').inert = true;
+    document.getElementById('main').inert = true;
+    document.getElementById('nav').inert = true;
     loginUser.focus();
   };
-  logoutBtn.onclick = () => auth.logout();
-  loginModal.onclick = (e) => { if (e.target === loginModal) loginModal.hidden = true; };
+  logoutBtn.title = '账号与集群设置';
+  logoutBtn.onclick = () => openSettings('account');
+  loginBtn.onclick = window.openLogin;
+  const closeLogin = () => {
+    loginModal.hidden = true;
+    loginPass.value = '';
+    document.getElementById('settingsPanel').inert = false;
+    const settingsOpen = document.getElementById('settingsPanel').classList.contains('open');
+    document.getElementById('main').inert = settingsOpen;
+    document.getElementById('nav').inert = settingsOpen;
+    if (loginReturnFocus?.isConnected && !loginReturnFocus.closest('[hidden]')) loginReturnFocus.focus();
+    else (settingsOpen ? document.getElementById('settingsClose') : document.getElementById('settingsBtn')).focus();
+  };
+  document.getElementById('loginClose').onclick = closeLogin;
+  loginModal.onclick = e => { if (e.target === loginModal) closeLogin(); };
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && !loginModal.hidden) loginModal.hidden = true;
+    if (loginModal.hidden) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeLogin(); }
+    if (e.key === 'Tab') {
+      const items = [...loginModal.querySelectorAll('input, button')].filter(el => !el.disabled);
+      const first = items[0], last = items.at(-1);
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
   });
 
   loginForm.onsubmit = async (e) => {
@@ -221,7 +168,7 @@ function initAuth() {
     try {
       await auth.login(loginUser.value.trim(), loginPass.value);
       loginPass.value = ''; // 提交后清空密码
-      loginModal.hidden = true;
+      closeLogin();
     } catch (err) {
       loginError.textContent = err.message || '登录失败';
       loginError.hidden = false;

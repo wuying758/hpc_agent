@@ -4,6 +4,7 @@ let state = { logged_in: false, username: null };
 const listeners = new Set();
 const accountListeners = new Set(); // 账号变更（登录/登出/切换）时回调
 let lastUser = null;
+let revision = 0;
 
 export function getAuth() { return state; }
 export function onAuthChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
@@ -21,9 +22,12 @@ function emit() {
 
 // 从服务端拉取真实登录状态（带 Cookie，同源自动携带）
 export async function refreshAuth() {
+  const version = ++revision;
   try {
     const r = await fetch('/api/auth/status', { credentials: 'same-origin' });
+    if (!r.ok) return state;
     const d = await r.json();
+    if (version !== revision) return state;
     state = d.logged_in
       ? { logged_in: true, username: d.username, expires: d.expires }
       : { logged_in: false, username: null };
@@ -36,6 +40,7 @@ export async function refreshAuth() {
 
 // 登录：成功后服务端设置 Cookie
 export async function login(operator, password) {
+  ++revision;
   const r = await fetch('/api/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -44,6 +49,7 @@ export async function login(operator, password) {
   });
   const d = await r.json();
   if (!r.ok) throw new Error(d.error || '登录失败');
+  ++revision;
   state = { logged_in: true, username: d.username, expires: d.expires };
   emit();
   return d;
@@ -51,7 +57,10 @@ export async function login(operator, password) {
 
 // 登出：撤销服务端会话 + 清 Cookie
 export async function logout() {
-  try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch {}
+  ++revision;
+  const r = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+  if (!r.ok) throw new Error('退出失败，请重试');
+  ++revision;
   state = { logged_in: false, username: null };
   emit();
 }

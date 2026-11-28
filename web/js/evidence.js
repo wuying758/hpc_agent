@@ -1,9 +1,11 @@
 // 证据卡片组件
-import { api, esc, openDrawer, closeDrawer } from './utils.js';
+import { api, esc, openDrawer, beginDrawerRequest, closeDrawer } from './utils.js';
 
 export async function loadEvidence(id) {
+  const isCurrent = beginDrawerRequest();
   try {
     const ev = await api('/api/evidence/' + id);
+    if (!isCurrent()) return;
     if (!ev || ev.error) return;
     const kindMap = { fact: '事实数据', rule: '规则判断', suggestion: '优化建议' };
     openDrawer('证据 ' + ev.id, `

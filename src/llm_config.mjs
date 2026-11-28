@@ -39,9 +39,13 @@ function mainKey() {
       const envPath = path.join(ROOT, '.env');
       const exists = fs.existsSync(envPath);
       const line = `LLM_ENCRYPTION_KEY=${hex}\n`;
-      fs.appendFileSync(envPath, (exists && !fs.readFileSync(envPath, 'utf8').endsWith('\n') ? '\n' : '') + line);
+      fs.appendFileSync(envPath, (exists && !fs.readFileSync(envPath, 'utf8').endsWith('\n') ? '\n' : '') + line, { mode: 0o600 });
       console.log('[llm_config] 已生成并写入 .env 的 LLM_ENCRYPTION_KEY（部署侧主密钥）');
-    } catch (e) { console.error('[llm_config] 写入 .env 失败：', e.message); }
+    } catch {
+      const error = new Error('模型加密主密钥无法持久化，请部署方设置 LLM_ENCRYPTION_KEY 后重试');
+      error.status = 503;
+      throw error;
+    }
     process.env.LLM_ENCRYPTION_KEY = hex;
   }
   _mainKey = buf;
@@ -71,34 +75,27 @@ export function decryptApiKey(stored) {
 }
 
 // ===== 允许访问的服务目标白名单（防 SSRF）=====
-// 明确配置的校内网关 + LLM_ALLOWED_HOSTS（逗号分隔）。只允许这些 host；
-// 仅允许 https（或明确配置的网关 host）。
-function allowedHostSet() {
-  const set = new Set();
-  const add = (u) => { try { set.add(new URL(u).hostname.toLowerCase()); } catch {} };
-  add(process.env.LLM_BASE_URL); // 默认/部署网关
-  for (const h of (process.env.LLM_ALLOWED_HOSTS || '').split(',')) {
-    const t = h.trim(); if (!t) continue;
-    try { set.add(new URL(t.startsWith('http') ? t : 'https://' + t).hostname.toLowerCase()); } catch { set.add(t.toLowerCase()); }
-  }
-  // 兜底：至少放行默认网关 host（若 LLM_BASE_URL 非法则空集合）
-  return set;
+// 只允许部署方配置的服务 origin（协议、主机与端口一起匹配）。
+function allowedOrigins() {
+  const origins = new Set();
+  const add = value => {
+    if (!value) return;
+    try { origins.add(new URL(value.includes('://') ? value : 'https://' + value).origin); } catch {}
+  };
+  add(process.env.LLM_BASE_URL);
+  for (const value of (process.env.LLM_ALLOWED_HOSTS || '').split(',')) add(value.trim());
+  return origins;
 }
 
-/**
- * 校验一个 base_url 是否属于允许访问的服务目标。
- * @returns {{ok: boolean, reason?: string}}
- */
 export function validateTarget(baseUrl) {
   let u;
   try { u = new URL(baseUrl); } catch { return { ok: false, reason: '服务地址格式不正确' }; }
   if (!/^https?:$/.test(u.protocol)) return { ok: false, reason: '仅支持 http/https 地址' };
-  const host = u.hostname.toLowerCase();
-  const allowed = allowedHostSet();
-  if (allowed.size && !allowed.has(host)) {
-    return { ok: false, reason: `该服务地址不在允许访问的列表内（允许：${[...allowed].join(', ')}）` };
-  }
-  return { ok: true, host };
+  if (u.username || u.password || u.search || u.hash) return { ok: false, reason: '服务地址不能包含用户名、密码、查询参数或片段' };
+  const allowed = allowedOrigins();
+  if (!allowed.size) return { ok: false, reason: '部署方尚未设置允许的模型服务地址，请配置 LLM_ALLOWED_HOSTS' };
+  if (!allowed.has(u.origin)) return { ok: false, reason: '该服务地址未获部署方允许，请联系管理员添加到 LLM_ALLOWED_HOSTS' };
+  return { ok: true };
 }
 
 // ===== 草稿检查：只获取模型列表 =====
@@ -125,6 +122,7 @@ export async function checkModels({ baseUrl, apiKey }) {
   try {
     const res = await fetch(base + '/models', {
       method: 'GET',
+      redirect: 'error',
       headers: { Authorization: 'Bearer ' + apiKey },
       signal: ctrl.signal,
     });
@@ -138,8 +136,8 @@ export async function checkModels({ baseUrl, apiKey }) {
     // OpenAI 兼容：{ data: [ { id } ] }；或裸数组 [ { id } ]
     const list = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : null;
     if (Array.isArray(list) && list.length) {
-      const ids = list.map(m => (typeof m === 'string' ? m : m?.id || m?.name)).filter(Boolean);
-      return { state: 'ok', models: ids };
+      const ids = [...new Set(list.map(m => (typeof m === 'string' ? m : m?.id || m?.name)).filter(id => typeof id === 'string' && id.trim()))];
+      if (ids.length) return { state: 'ok', models: ids };
     }
     // 200 但结构不是模型列表 → 视为不支持
     return { state: 'no-models', note: '该服务未返回可识别的模型列表，可手动填写模型名称后保存' };
@@ -150,23 +148,22 @@ export async function checkModels({ baseUrl, apiKey }) {
   }
 }
 
-// ===== 配置快照：每轮聊天/任务开始时取一次，后续工具循环/重试/建议/标题沿用同一快照 =====
-// 取当前用户的模型连接；未配置则回退部署默认。
-// @returns {{baseUrl: string, apiKey: string, model: string|null, configured: boolean}}
+// Web 请求必须使用该账号的个人配置；CLI 仍可直接使用 agent.mjs 的部署配置。
 export async function resolveLlmSnapshot(owner) {
-  const defBase = (process.env.LLM_BASE_URL || '').replace(/\/+$/, '');
-  const defKey = process.env.LLM_API_KEY || '';
-  const defModel = process.env.LLM_MODEL || null;
-  if (!owner) return { baseUrl: defBase, apiKey: defKey, model: defModel, configured: false };
-  let row = null;
-  try { row = (await import('./store.mjs')).getUserLlmConfig(owner); } catch { row = null; }
-  if (!row || !row.base_url) {
-    return { baseUrl: defBase, apiKey: defKey, model: defModel, configured: false };
+  const { getUserLlmConfig } = await import('./store.mjs');
+  const row = owner ? getUserLlmConfig(owner) : null;
+  const key = row?.api_key_enc ? decryptApiKey(row.api_key_enc) : null;
+  if (!row?.base_url || !row.model || !key) {
+    const error = new Error('请先在设置 → 模型 API 中保存服务地址、API Key 和默认模型');
+    error.status = 422;
+    error.code = 'MODEL_NOT_CONFIGURED';
+    throw error;
   }
-  const key = row.api_key_enc ? decryptApiKey(row.api_key_enc) : null;
-  if (!key) {
-    // 密钥解密失败（主密钥变更）→ 回退部署默认，避免直接报错中断
-    return { baseUrl: defBase, apiKey: defKey, model: defModel, configured: false };
+  const target = validateTarget(row.base_url);
+  if (!target.ok) {
+    const error = new Error(target.reason);
+    error.status = 422;
+    throw error;
   }
-  return { baseUrl: row.base_url.replace(/\/+$/, ''), apiKey: key, model: row.model || defModel, configured: true };
+  return { baseUrl: row.base_url.replace(/\/+$/, ''), apiKey: key, model: row.model, configured: true, version: row.version };
 }

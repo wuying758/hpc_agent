@@ -1,145 +1,122 @@
-// 数据与连接管理（渲染进设置面板的「数据与连接」分组）
+// 共享数据状态；关闭设置或离开此分组时停止轮询。
 import { esc, api } from './utils.js';
+import * as auth from './auth.js';
 
-// 进入数据分组时刷新；每次打开都会调用
-export function refreshDataGroup() { loadStatus(); }
+let timer, controller, version = 0, active = false, lastRun = null, lastStatus = null;
+const $ = id => document.getElementById(id);
+const dateTime = t => t ? new Date(t).toLocaleString('zh-CN') : '尚未记录';
 
-// 兼容旧入口
-export function initData() { loadStatus(); }
-
-async function loadStatus() {
-  const el = document.getElementById('dataBody');
-  if (!el) return;
-  el.innerHTML = '<div class="empty">加载中…</div>';
+export function stopDataRefresh() {
+  active = false;
+  version++;
+  clearTimeout(timer);
+  controller?.abort();
+}
+export function initData() { refreshDataGroup(); }
+export async function refreshDataGroup() {
+  stopDataRefresh();
+  active = true;
+  controller = new AbortController();
+  const current = version;
+  const el = $('dataBody');
+  if (!auth.isLogged()) {
+    el.innerHTML = '<div class="settings-empty"><strong>登录后查看共享数据</strong><p>同步将使用发起人的 HPC 登录凭据。</p><button type="button" class="btn btn-primary" data-settings-login>登录 HPC 账号</button></div>';
+    return;
+  }
+  el.innerHTML = '<div class="settings-feedback" role="status">正在读取集群数据状态…</div>';
   try {
-    const s = await api('/api/status');
-    const fmtDay = d => d ? `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6)}` : '—';
-    const range = s.data.覆盖范围 ? s.data.覆盖范围.split(' ~ ') : null;
-    el.innerHTML = `
-      <h4>数据与连接</h4>
-      <p class="settings-group-desc">HPC 集群与模型 API 的连接状态、数据覆盖范围</p>
-      <div class="status-card">
-        <h5>HPC 集群连接</h5>
-        <div class="status-row"><span class="label">配置状态</span><span class="val ${s.hpc.已配置 ? 'ok' : 'err'}">${s.hpc.已配置 ? '✓ 已配置' : '✗ 未配置'}</span></div>
-        <div class="status-row"><span class="label">API 地址</span><span class="val" style="font-size:12px">${esc(s.hpc.地址 || '—')}</span></div>
-        ${s.hpc.错误 ? `<div class="status-row"><span class="label">错误</span><span class="val err" style="font-size:11px">${esc(s.hpc.错误)}</span></div>` : ''}
-      </div>
-      <div class="status-card">
-        <h5>模型连接</h5>
-        <div class="status-row"><span class="label">配置状态</span><span class="val ${s.llm.已配置 ? 'ok' : 'err'}">${s.llm.已配置 ? '✓ 已配置' : '✗ 未配置'}</span></div>
-        <div class="status-row"><span class="label">模型</span><span class="val">${esc(s.llm.模型 || '—')}</span></div>
-      </div>
-      <div class="status-card">
-        <h5>数据状态</h5>
-        <div class="status-row"><span class="label">数据文件</span><span class="val">${s.data.文件数} 个</span></div>
-        <div class="status-row"><span class="label">覆盖范围</span><span class="val">${range ? fmtDay(range[0]) + ' ~ ' + fmtDay(range[1]) : '无'}</span></div>
-        <div class="status-row"><span class="label">最近采集</span><span class="val">${s.data.最近采集 ? new Date(s.data.最近采集).toLocaleString('zh-CN') : '未记录'}</span></div>
-        <div class="status-row"><span class="label">分析缓存更新</span><span class="val">${s.data.分析更新 ? new Date(s.data.分析更新).toLocaleString('zh-CN') : '未生成'}</span></div>
-        <div class="status-row"><span class="label">服务运行</span><span class="val">${Math.round(s.uptime_s / 60)} 分钟</span></div>
-      </div>
-      <div class="status-card">
-        <h5>共享数据同步</h5>
-        <div id="syncCard" class="sync-card"></div>
-      </div>
-      <div class="settings-actions">
-        <button class="btn btn-sm" id="checkConn">检查连接</button>
-        <button class="btn btn-sm btn-primary" id="fetchData">更新数据</button>
-      </div>
-      <div id="connResult" class="conn-result"></div>
-    `;
-    document.getElementById('checkConn').onclick = doCheck;
-    document.getElementById('fetchData').onclick = doFetch;
-    renderSyncCard(null, { status: 'loading' });
-    loadSyncStatus();
+    const [status, sync] = await Promise.all([
+      api('/api/status', { signal: controller.signal }),
+      api('/api/sync-status', { signal: controller.signal }),
+    ]);
+    if (!active || current !== version) return;
+    el.innerHTML = `<div class="data-section"><div class="settings-card-head"><h5>数据快照</h5><span class="subtle-tag">全站共享</span></div><div id="dataSnapshot" class="settings-detail-list"></div></div>
+      <div class="data-section"><div class="settings-card-head"><h5>共享同步</h5><button type="button" class="btn btn-primary btn-sm" id="fetchData">更新数据</button></div><div id="syncCard" aria-live="polite"></div></div>
+      <div class="settings-note"><strong>一份集群数据，一次同步任务</strong><p>多人同时更新时会查看同一个任务的进度。同步完成后，集群总览与作业列表自动刷新。</p></div>
+      <div id="connResult" class="settings-feedback" role="status" hidden></div>`;
+    renderSnapshot(status);
+    renderSync(sync);
+    $('fetchData').onclick = doFetch;
+    observeSync(sync, current);
   } catch (e) {
-    el.innerHTML = `<div class="empty">加载失败: ${esc(e.message)}</div>`;
+    if (!active || current !== version) return;
+    el.innerHTML = `<div class="settings-feedback" data-kind="error">${esc(e.message)} <button type="button" class="text-button" id="dataRetry">重新读取</button></div>`;
+    $('dataRetry').onclick = refreshDataGroup;
   }
 }
-
-async function doCheck() {
-  const el = document.getElementById('connResult');
-  el.innerHTML = '<div class="conn-line">检查中…</div>';
-  try {
-    const r = await api('/api/check-connection', { method: 'POST' });
-    const hpcMsg = r.hpc.ok ? '✓ 连接成功'
-      : (r.hpc.needReauth ? '⚠ ' + esc(r.hpc.error || '登录已过期，请重新登录')
-      : '✗ ' + esc(r.hpc.error || '失败'));
-    el.innerHTML = `
-      <div class="conn-line ${r.hpc.ok ? 'ok' : 'err'}"><b>HPC:</b> ${hpcMsg}</div>
-      <div class="conn-line ${r.llm.ok ? 'ok' : 'err'}"><b>模型:</b> ${r.llm.ok ? `✓ 连接成功 (${r.llm.status})` : '✗ ' + esc(r.llm.error || '失败')}</div>`;
-  } catch (e) {
-    el.innerHTML = `<div class="conn-line err">检查失败: ${esc(e.message)}</div>`;
-  }
+function renderSnapshot(s) {
+  const range = s.data.覆盖范围?.split(' ~ ');
+  const day = value => /^\d{8}$/.test(value || '') ? `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6)}` : '—';
+  $('dataSnapshot').innerHTML = [
+    ['覆盖范围', range?.length === 2 ? `${day(range[0])} — ${day(range[1])}` : '尚无数据'],
+    ['数据文件', `${s.data.文件数} 个`],
+    ['最近采集', dateTime(s.data.最近采集)],
+    ['分析快照生成', dateTime(s.data.分析更新)],
+  ].map(([label, value]) => `<div><span>${label}</span><strong>${esc(value)}</strong></div>`).join('');
 }
-
-async function doFetch() {
-  const el = document.getElementById('connResult');
-  const btn = document.getElementById('fetchData');
-  btn.disabled = true;
-  renderSyncCard(null, { status: 'starting', message: '正在发起同步…' });
-  try {
-    const r = await api('/api/fetch-data', { method: 'POST' });
-    if (r.alreadyRunning) {
-      el.innerHTML = `<div class="conn-line">已有同步在进行中，正在查看共享进度…</div>`;
-    } else {
-      el.innerHTML = `<div class="conn-line ok">已启动共享数据同步（大家共用同一任务）。</div>`;
-    }
-    // 轮询进度直到结束
-    pollSync();
-  } catch (e) {
-    el.innerHTML = `<div class="conn-line err">${esc(e.message)}</div>`;
-    btn.disabled = false;
-    renderSyncCard(null, { status: 'error', message: e.message });
-  }
+function renderSync(s) {
+  const running = s.status === 'running';
+  const labels = { idle: '○ 等待更新', running: '◌ 同步进行中', done: '✓ 上次同步完成', error: '× 上次同步失败' };
+  const progress = Math.max(0, Math.min(100, Number(s.progress) || 0));
+  $('syncCard').innerHTML = `<div class="sync-summary"><span class="connection-badge ${s.status === 'done' ? 'is-ready' : s.status === 'error' ? 'is-error' : ''}">${labels[s.status] || '正在读取'}</span>${running ? `<span>${progress}%</span>` : ''}</div>
+    ${running ? `<progress class="sync-progress" value="${progress}" max="100" aria-label="共享数据同步进度">${progress}%</progress>` : ''}
+    <p class="sync-description">${esc(s.error || s.message || '需要最新数据时，点击更新。')}</p>
+    ${s.startedAt ? `<div class="sync-meta"><span>由 ${esc(s.by || '已登录用户')} 发起</span><span>${esc(dateTime(s.startedAt))}</span>${s.durationS != null ? `<span>用时 ${esc(String(s.durationS))} 秒</span>` : ''}</div>` : ''}`;
+  const btn = $('fetchData');
+  btn.disabled = running;
+  btn.textContent = running ? '同步进行中…' : s.status === 'error' ? '重新同步' : '更新数据';
 }
-
-let pollTimer = null;
-async function pollSync() {
-  stopPoll();
-  pollTimer = setInterval(async () => {
+function observeSync(s, current) {
+  if (s.status === 'done' && (lastStatus === 'running' || (lastRun && lastRun !== s.startedAt))) {
+    window.dispatchEvent(new CustomEvent('cluster-data-updated'));
+  }
+  const completed = lastStatus === 'running' && s.status !== 'running';
+  lastRun = s.startedAt;
+  lastStatus = s.status;
+  if (completed) {
+    api('/api/status', { signal: controller.signal }).then(status => {
+      if (active && current === version) renderSnapshot(status);
+    }).catch(() => {});
+  }
+  if (s.status === 'running') schedulePoll(current);
+}
+function schedulePoll(current) {
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    if (!active || current !== version) return;
     try {
-      const s = await api('/api/sync-status');
-      renderSyncCard(null, s);
-      if (s.status !== 'running') {
-        stopPoll();
-        const btn = document.getElementById('fetchData');
-        if (btn) btn.disabled = false;
-        // 同步完成后刷新数据状态（文件数/覆盖范围会变化）
-        loadStatus();
-      }
-    } catch (e) { /* 忽略单次轮询失败 */ }
-  }, 1500);
+      const s = await api('/api/sync-status', { signal: controller.signal });
+      if (!active || current !== version) return;
+      $('connResult').hidden = true;
+      renderSync(s);
+      observeSync(s, current);
+    } catch (e) {
+      if (!active || current !== version) return;
+      $('connResult').textContent = '进度读取失败，正在重试…';
+      $('connResult').hidden = false;
+      schedulePoll(current);
+    }
+  }, 1600);
 }
-function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
-
-async function loadSyncStatus() {
+async function doFetch() {
+  const current = version, btn = $('fetchData');
+  btn.disabled = true;
+  btn.textContent = '正在发起…';
+  $('connResult').hidden = true;
   try {
-    const s = await api('/api/sync-status');
-    renderSyncCard(null, s);
-    if (s.status === 'running') pollSync(); // 面板打开时若正在同步，继续轮询
-  } catch { renderSyncCard(null, { status: 'idle' }); }
-}
-
-function renderSyncCard(_root, s) {
-  const el = document.getElementById('syncCard');
-  if (!el) return;
-  const label = { idle: '空闲', running: '同步中…', done: '已完成', error: '同步失败' }[s.status] || s.status;
-  const cls = { idle: '', running: 'running', done: 'ok', error: 'err' }[s.status] || '';
-  let bar = '';
-  if (s.status === 'running') {
-    bar = `<div class="sync-bar"><div class="sync-bar-fill" style="width:${s.progress || 0}%"></div></div>
-      <div class="status-row"><span class="label">进度</span><span class="val">${s.progress || 0}%${s.total ? ' · 已拉 ' + s.total + ' 条' : ''}</span></div>`;
+    await api('/api/fetch-data', { method: 'POST', signal: controller.signal });
+    if (!active || current !== version) return;
+    lastStatus = 'running';
+    const s = await api('/api/sync-status', { signal: controller.signal });
+    if (!active || current !== version) return;
+    renderSync(s);
+    observeSync(s, current);
+  } catch (e) {
+    if (!active || current !== version) return;
+    $('connResult').textContent = e.message;
+    $('connResult').dataset.kind = 'error';
+    $('connResult').hidden = false;
+    btn.disabled = false;
+    btn.textContent = '重试更新';
   }
-  const when = (t) => t ? new Date(t).toLocaleTimeString('zh-CN') : '';
-  let extra = '';
-  if (s.status === 'done') extra = `<div class="status-row"><span class="label">结果</span><span class="val">${esc(s.message || '')}</span></div>
-    ${s.durationS != null ? `<div class="status-row"><span class="label">用时</span><span class="val">${s.durationS}s</span></div>` : ''}`;
-  if (s.status === 'error') extra = `<div class="status-row"><span class="label">错误</span><span class="val err" style="font-size:12px">${esc(s.error || s.message || '')}</span></div>`;
-  el.innerHTML = `
-    <div class="status-row"><span class="label">状态</span><span class="val ${cls}">${label}</span></div>
-    ${bar}
-    ${extra}
-    ${s.by ? `<div class="status-row"><span class="label">发起人</span><span class="val" style="font-size:12px">${esc(s.by)}</span></div>` : ''}
-    ${s.startedAt ? `<div class="status-row"><span class="label">开始</span><span class="val" style="font-size:12px">${when(s.startedAt)}</span></div>` : ''}
-    <p class="settings-group-desc" style="margin-top:8px">共享集群数据：同一时间只跑一个同步任务，多人可看到同一进度。</p>`;
 }

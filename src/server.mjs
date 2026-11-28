@@ -5,10 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { agentChat, cfg, tools, validateTicketAction, llmFetch } from './agent.mjs';
+import { agentChat, cfg, tools, validateTicketAction, llmFetch, USE_DEFAULT_MODEL } from './agent.mjs';
 import { analyze, loadJobs, getAnalysis } from './analyze.mjs';
 import * as store from './store.mjs';
-import { checkCreds, getToken, runWithHpc } from './hpc_client.mjs';
+import { getToken, runWithHpc } from './hpc_client.mjs';
 import { encryptApiKey, decryptApiKey, validateTarget, checkModels, resolveLlmSnapshot } from './llm_config.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -55,8 +55,6 @@ const syncState = { status: 'idle', startedAt: null, finishedAt: null, total: nu
 let syncRunning = null; // 正在跑的 Promise，用于防止并发重复启动
 async function startSync(conn) {
   if (syncRunning) return { started: false, alreadyRunning: true };
-  const { fetchAndSave } = await import('./fetch_jobs.mjs');
-  if (!fetchAndSave) throw new Error('fetch 模块未导出 fetchAndSave');
   syncState.status = 'running';
   syncState.startedAt = Date.now();
   syncState.finishedAt = null;
@@ -67,9 +65,10 @@ async function startSync(conn) {
   syncState.message = '开始同步…';
   syncRunning = (async () => {
     try {
+      const { fetchAndSave } = await import('./fetch_jobs.mjs');
       const r = await fetchAndSave({ conn, onProgress: (p) => { Object.assign(syncState, { progress: p.progress, total: p.total, message: p.message }); } });
       if (r.skipped) { syncState.status = 'done'; syncState.message = r.reason; syncState.total = 0; }
-      else { syncState.status = 'done'; syncState.total = r.total; syncState.progress = 100; syncState.message = `同步完成，新增 ${r.total} 条作业，用时 ${(r.elapsed / 1000).toFixed(0)}s`; }
+      else { syncState.status = 'done'; syncState.total = r.total; syncState.progress = 100; syncState.message = `同步完成，拉取 ${r.total} 条作业记录，用时 ${(r.elapsed / 1000).toFixed(0)}s`; }
     } catch (e) {
       syncState.status = 'error';
       syncState.error = e.message?.slice(0, 300) || String(e);
@@ -136,7 +135,7 @@ function ownTicket(req, id) {
 // 后台任务执行器（进程内队列）
 const runningTasks = new Map(); // taskId -> { abort: AbortController, timer }
 
-async function executeTask(taskId, userMsg, days, conn) {
+async function executeTask(taskId, userMsg, days, conn, llm) {
   const task = store.getTask(taskId);
   if (!task) return;
   const ac = new AbortController();
@@ -147,7 +146,6 @@ async function executeTask(taskId, userMsg, days, conn) {
   try {
     // 后台任务启动时固定所属用户的 HPC 连接上下文，整个执行过程始终用该身份
     // 同时取一次该用户的模型配置快照，任务全程沿用
-    const llm = await resolveLlmSnapshot(task.owner);
     await runWithHpc(conn, async () => {
       for await (const ev of agentChat(store.getSessionHistory(task.session_id || ''), userMsg, { ctx: { owner: task.owner, sessionId: task.session_id || null, taskId }, llm })) {
         if (ac.signal.aborted) { store.updateTask(taskId, { status: 'cancelled', finished_at: new Date().toISOString() }); return; }
@@ -187,6 +185,12 @@ const server = http.createServer(async (req, res) => {
     res.end(typeof data === 'string' ? data : JSON.stringify(data));
   };
   try {
+    if (req.method === 'POST' && url.pathname.startsWith('/api/llm-config')) {
+      const origin = req.headers.origin;
+      if (req.headers['sec-fetch-site'] === 'cross-site' || (origin && new URL(origin).host !== req.headers.host)) {
+        return send(403, { error: '请从工作台页面修改模型配置' });
+      }
+    }
     // ===== 登录（HPC 认证成功后建立服务端会话 + HttpOnly Cookie）=====
     if (url.pathname === '/api/login' && req.method === 'POST') {
       const body = await new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => r(b)); });
@@ -244,6 +248,7 @@ const server = http.createServer(async (req, res) => {
       // 对话需要登录（HPC token 从服务端会话读取，不再由前端携带）
       const login = currentLogin(req);
       if (!login) return send(401, { error: '未登录，请先登录 JAccount' });
+      const llm = await resolveLlmSnapshot(login.username);
       // 会话归属：引用已有 session_id 必须属于当前用户；否则新建并归属当前用户
       let sid;
       if (session_id) {
@@ -270,7 +275,6 @@ const server = http.createServer(async (req, res) => {
       // 以该登录用户的 HPC 连接上下文运行整个对话（含工具调用），按请求隔离
       const conn = { token: login.hpc_token, tokenExp: login.token_exp, operator: login.username, isServerUser: login.username === process.env.HPC_OPERATOR };
       // 本轮对话开始时取一次模型配置快照；后续工具循环/重试/建议/标题沿用同一快照
-      const llm = await resolveLlmSnapshot(login.username);
       await runWithHpc(conn, async () => {
         for await (const ev of agentChat(hist, message, { model, ctx: { owner: login.username, sessionId: sid }, llm })) {
           if (clientGone) break;
@@ -301,21 +305,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ===== 模型列表（用当前登录用户的模型连接）=====
+    // 只列出该用户服务返回的模型，或手填的默认模型；不构造虚假候选项。
     if (url.pathname === '/api/models') {
       const login = currentLogin(req);
-      const llm = await resolveLlmSnapshot(login ? login.username : null);
-      try {
-        const base = (llm.baseUrl || cfg.baseUrl).replace(/\/$/, '');
-        const key = llm.apiKey ?? cfg.apiKey;
-        const r = await fetch(base + '/models', { headers: { Authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(10000) });
-        const d = await r.json().catch(() => null);
-        const models = (d?.data || d || []).map(m => (typeof m === 'string' ? m : m?.id || m?.name)).filter(Boolean);
-        send(200, { models: models.length ? models : ['qwen', 'deepseek-chat', 'deepseek-reasoner'], default: llm.model || cfg.model, configured: llm.configured });
-      } catch {
-        send(200, { models: ['qwen', 'deepseek-chat', 'deepseek-reasoner'], default: llm.model || cfg.model, configured: llm.configured });
+      if (!login) return send(401, { error: '请先登录 HPC 账号' });
+      let llm;
+      try { llm = await resolveLlmSnapshot(login.username); }
+      catch (e) {
+        if (e.code === 'MODEL_NOT_CONFIGURED') return send(200, { models: [], default: null, configured: false });
+        throw e;
       }
-      return;
+      const result = await checkModels(llm);
+      return send(200, {
+        models: [...new Set([llm.model, ...(result.models || [])])],
+        default: llm.model, configured: true,
+        ...(result.error ? { error: result.error } : {}),
+      });
     }
 
     // ===== 分析快照（需登录）=====
@@ -439,6 +444,7 @@ const server = http.createServer(async (req, res) => {
         const body = JSON.parse(await new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => r(b)); }));
         // 后台任务会调用 HPC 工具，需登录；启动时固定所属用户身份
         if (!login) { send(401, { error: '未登录，请先登录 JAccount' }); return; }
+        const llm = await resolveLlmSnapshot(login.username);
         const conn = { token: login.hpc_token, tokenExp: login.token_exp, operator: login.username, isServerUser: login.username === process.env.HPC_OPERATOR };
         const id = 't-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
         let sessionId;
@@ -452,7 +458,7 @@ const server = http.createServer(async (req, res) => {
         store.createTask({ id, title: body.title || '分析任务', sessionId, days: body.days || 7, owner: login.username });
         if (body.message) store.addMessage(sessionId, 'user', body.message);
         // 后台执行（固定该用户的连接上下文）
-        executeTask(id, body.message || body.title, body.days || 7, conn);
+        executeTask(id, body.message || body.title, body.days || 7, conn, llm);
         send(200, { id, session_id: sessionId });
         return;
       }
@@ -585,6 +591,8 @@ const server = http.createServer(async (req, res) => {
 
     // ===== 数据与连接 =====
     if (url.pathname === '/api/status') {
+      const login = currentLogin(req);
+      if (!login) return send(401, { error: '请先登录 HPC 账号' });
       const dataDir = path.join(ROOT, 'data');
       const jobFiles = fs.readdirSync(dataDir).filter(f => /^jobs_\d{8}\.jsonl$/.test(f)).sort();
       const firstDay = jobFiles.length ? jobFiles[0].slice(5, 13) : null;
@@ -596,35 +604,30 @@ const server = http.createServer(async (req, res) => {
       const cacheDir = path.join(dataDir, 'cache');
       let analysisTime = null;
       try { const cf = fs.readdirSync(cacheDir).find(f => f.endsWith('.json')); if (cf) analysisTime = new Date(fs.statSync(path.join(cacheDir, cf)).mtimeMs).toISOString(); } catch {}
-      let hpcOk = false, hpcErr = null;
-      try { checkCreds(); hpcOk = true; } catch (e) { hpcErr = e.message; }
+      const modelConfig = store.getUserLlmConfig(login.username);
       send(200, {
         data: { 文件数: jobFiles.length, 覆盖范围: firstDay && lastDay ? `${firstDay} ~ ${lastDay}` : '无', 最近采集: lastFetch, 分析更新: analysisTime },
-        hpc: { 已配置: hpcOk, 地址: hpcOk ? process.env.HPC_API_URL : '未配置', 错误: hpcErr },
-        llm: { 已配置: !!(cfg.baseUrl && cfg.apiKey), 模型: cfg.model },
+        hpc: { 已配置: true, 地址: process.env.HPC_API_URL || null, 用户: login.username },
+        llm: { 已配置: !!(modelConfig?.base_url && modelConfig?.model && modelConfig?.api_key_enc), 模型: modelConfig?.model || null },
         uptime_s: Math.round(process.uptime()),
       });
       return;
     }
     if (url.pathname === '/api/check-connection' && req.method === 'POST') {
-      // 触发连接检查（以当前登录用户的身份验证 HPC token 是否有效）
-      const result = { hpc: { ok: false }, llm: { ok: false } };
       const login = currentLogin(req);
+      if (!login) return send(401, { error: '请先登录 HPC 账号' });
+      const result = { hpc: { ok: false }, llm: { ok: false } };
       try {
-        const conn = login ? { token: login.hpc_token, tokenExp: login.token_exp, operator: login.username, isServerUser: login.username === process.env.HPC_OPERATOR } : null;
-        if (login) await runWithHpc(conn, () => getToken()); else await getToken();
-        result.hpc = { ok: true };
-      } catch (e) {
-        result.hpc = { ok: false, error: e.message.slice(0, 200), needReauth: !!e.needReauth };
-      }
+        const conn = { token: login.hpc_token, tokenExp: login.token_exp, operator: login.username, isServerUser: login.username === process.env.HPC_OPERATOR };
+        await runWithHpc(conn, () => getToken());
+        result.hpc = { ok: true, note: '当前 HPC 登录凭据有效' };
+      } catch (e) { result.hpc = { ok: false, error: e.message, needReauth: !!e.needReauth }; }
       try {
-        const llm = await resolveLlmSnapshot(login ? login.username : null);
-        const base = (llm.baseUrl || cfg.baseUrl).replace(/\/$/, '');
-        const r = await fetch(base + '/models', { headers: { Authorization: 'Bearer ' + (llm.apiKey ?? cfg.apiKey) }, signal: AbortSignal.timeout(10000) });
-        result.llm = { ok: r.ok, status: r.status };
-      } catch (e) { result.llm = { ok: false, error: e.message.slice(0, 200) }; }
-      send(200, result);
-      return;
+        const llm = await resolveLlmSnapshot(login.username);
+        const checked = await checkModels(llm);
+        result.llm = { ok: checked.state === 'ok', error: checked.error, note: checked.note };
+      } catch (e) { result.llm = { ok: false, error: e.message }; }
+      return send(200, result);
     }
     // ===== 个人模型配置 =====
     // 查询当前用户的配置（只返回 hasApiKey，不返回原密钥）
@@ -633,12 +636,12 @@ const server = http.createServer(async (req, res) => {
       if (!login) { send(401, { error: '未登录，请先登录 JAccount' }); return; }
       const row = store.getUserLlmConfig(login.username);
       if (!row || !row.base_url) {
-        // 未配置：回退到部署默认（只暴露默认网关信息，不暴露默认密钥）
+        // 未配置时仅提供网关地址建议，不继承部署方的密钥或模型。
         send(200, {
           configured: false,
           baseUrl: process.env.LLM_BASE_URL || null,
-          model: process.env.LLM_MODEL || null,
-          hasApiKey: !!(process.env.LLM_API_KEY),
+          model: null,
+          hasApiKey: false,
           version: 0,
         });
         return;
@@ -687,6 +690,8 @@ const server = http.createServer(async (req, res) => {
 
       if (!baseUrl) { send(400, { error: '请填写服务地址' }); return; }
 
+      if (!model) return send(400, { error: '请填写默认模型 ID' });
+      if (!keyPlain) return send(400, { error: '请填写你的 API Key' });
       const nextVersion = (prev.version || 0) + 1;
       store.saveUserLlmConfig({
         owner: login.username,
@@ -712,7 +717,11 @@ const server = http.createServer(async (req, res) => {
       const login = currentLogin(req);
       if (!login) { send(401, { error: '未登录，请先登录 JAccount' }); return; }
       const body = JSON.parse(await new Promise(r => { let b = ''; req.on('data', c => b += c); req.on('end', () => r(b)); }));
-      const result = await checkModels({ baseUrl: (body.baseUrl || '').trim(), apiKey: (body.apiKey || '').trim() });
+      const baseUrl = (body.baseUrl || '').trim().replace(/\/+$/, '');
+      const prev = store.getUserLlmConfig(login.username);
+      const sameSource = prev?.base_url?.replace(/\/+$/, '') === baseUrl;
+      const apiKey = (body.apiKey || '').trim() || (sameSource ? decryptApiKey(prev.api_key_enc) : null);
+      const result = await checkModels({ baseUrl, apiKey });
       send(200, result);
       return;
     }
@@ -754,7 +763,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': mime });
     res.end(fs.readFileSync(p));
   } catch (e) {
-    if (!res.headersSent) { try { res.writeHead(500, { 'Content-Type': 'text/plain' }); res.end('error: ' + e.message); } catch {} }
+    if (!res.headersSent) { try { send(e.status || 500, { error: e.message, ...(e.code ? { code: e.code } : {}) }); } catch {} }
     else { try { res.end(); } catch {} }
     console.error('request error:', e.message);
   }
@@ -771,8 +780,8 @@ async function genSessionTitle(userMsg, reply, model, llm) {
         { role: 'assistant', content: reply.slice(0, 500) },
       ],
     };
-    const resolvedModel = (model && model !== USE_DEFAULT_MODEL) ? model : (llm?.model ?? cfg.model);
-    if (model !== USE_DEFAULT_MODEL && resolvedModel) body.model = resolvedModel;
+    const resolvedModel = (model && model !== USE_DEFAULT_MODEL) ? model : (llm || cfg).model;
+    if (resolvedModel) body.model = resolvedModel;
     const res = await llmFetch(body, { retries: 1, timeoutMs: 15000, llm });
     if (!res.ok) return null;
     const data = await res.json();
